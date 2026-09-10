@@ -59,3 +59,15 @@ Unresolved questionnaire classifications such as employment status, civil status
 **Status:** Accepted for Phase 3B
 
 Structures use internal UUIDs as authoritative identifiers. Captured tag values are stored separately and are not globally unique until the confirmed uniqueness scope is known.
+
+## ADR-011: First migration uses PostgreSQL CHECK constraints for safe relationship rules
+
+**Status:** Accepted for Phase 3C
+
+The initial migration adds database-level `CHECK` constraints for relationship rules that Prisma cannot express directly: business owner XOR person/organization, land owner XOR person/organization, structure occupancy XOR household/business/person, and preventing self-associated structures.
+
+## ADR-012: Phase 3C seeds lookup families, not unresolved category values
+
+**Status:** Accepted for Phase 3C
+
+The seed script creates lookup-set shells and minimal questionnaire-version rows only. It does not seed authoritative civil status, employment status, education, relationship, structure, or land-use values while classification conflicts remain unresolved.

@@ -6,7 +6,11 @@
     "dev": "tsx watch src/main.ts",
     "build": "tsc --project tsconfig.json",
     "start": "node dist/main.js",
-    "typecheck": "tsc --project tsconfig.json --noEmit"
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "db:seed": "prisma db seed --schema prisma/schema.prisma"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.10",
