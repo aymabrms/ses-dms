@@ -27,7 +27,7 @@ type InterviewRow = { id: string; project_id: string; survey_area_id: string; lo
 type ModuleRow = { id: string; interview_id: string; local_sync_status: string };
 type RepeatRow = { id: string };
 
-export function OfflineDebugScreen() {
+export function OfflineDebugScreen({ onOpenHouseholdModule }: { onOpenHouseholdModule?: (moduleId: string) => void }) {
   const [initialized, setInitialized] = useState(false);
   const [schemaVersion, setSchemaVersion] = useState(0);
   const [counts, setCounts] = useState<Counts>({ conflictOutbox: 0, failedOutbox: 0, interviews: 0, outbox: 0, projects: 0, questionnaireVersions: 0, surveyAreas: 0, syncedModules: 0 });
@@ -140,6 +140,17 @@ export function OfflineDebugScreen() {
     }
   }
 
+  async function openLatestHouseholdModule() {
+    try {
+      const db = await getDatabase();
+      const module = await db.getFirstAsync<ModuleRow>("SELECT id, interview_id, local_sync_status FROM local_interview_modules WHERE module_type = ? ORDER BY updated_at DESC LIMIT 1", "HOUSEHOLD");
+      if (!module) throw new Error("Create a local Household module first");
+      onOpenHouseholdModule?.(module.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Open Household questionnaire failed");
+    }
+  }
+
   async function syncPending() {
     try {
       const results = await processPendingSync();
@@ -185,6 +196,7 @@ export function OfflineDebugScreen() {
           <Button title="Refresh" onPress={() => void refresh()} />
           <Button title="Bootstrap Reference Data" onPress={() => void bootstrap()} />
           <Button title="Create Local Test Interview" onPress={() => void createTestInterview()} />
+          <Button title="Open Latest Household Questionnaire" onPress={() => void openLatestHouseholdModule()} />
           <Button title="Add Repeat + Response" onPress={() => void addRepeatAndResponse()} />
           <Button title="Queue Latest Module" onPress={() => void enqueueLatestModule()} />
           <Button title="Sync Pending" onPress={() => void syncPending()} />

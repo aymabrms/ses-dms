@@ -167,3 +167,9 @@ When the server returns a module revision conflict, the mobile app marks the mod
 **Status:** Accepted for Phase 5C
 
 Offline-created mobile interview graphs use client-generated UUIDs as the final server IDs. The server validates server-owned references, creates each new interview graph transactionally, initializes new modules at revision `1`, and returns per-graph `REJECTED` results for invalid create bundles without ID remapping.
+
+## ADR-029: Phase 6B uses bundled versioned questionnaire definitions
+
+**Status:** Accepted for Phase 6B
+
+The first dynamic renderer loads versioned questionnaire definitions bundled with the mobile app and resolves them through a registry by `moduleType` and `versionCode`. Definitions drive rendering, simple rules, repeat groups, and completion calculation while existing SQLite response/repeat tables remain the persistence model.

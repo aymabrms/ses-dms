@@ -1,4 +1,7 @@
 import type { LocalDatabase } from "./db/types";
+import { buildResponseInput } from "./questionnaires/responseMapping";
+import { getQuestionnaireDefinition } from "./questionnaires/registry";
+import { assertUniqueQuestionCodes, calculateCompletion, indexResponses, isQuestionRequired, isQuestionVisible, isRepeatDeletionAllowed } from "./questionnaires/runtime";
 import { buildModuleSyncPayload, mapRepeatForSync, mapResponseForSync } from "./sync/payloadBuilder";
 import { buildModuleSyncOutboxPayload } from "./sync/outboxPayload";
 import { processAcceptedModuleResult } from "./sync/syncStateRepository";
@@ -74,7 +77,53 @@ async function main() {
   await assertCreateGraphPayload();
   await assertCompactExistingModulePayload();
   await assertAcceptedCreateReconciliation();
+  assertQuestionnaireRuntime();
   console.log("ok - mobile offline foundation pure checks");
+}
+
+function assertQuestionnaireRuntime() {
+  const definition = getQuestionnaireDefinition("HOUSEHOLD", "INITIAL");
+  assertJsonEqual(definition.id, "household-20220525-v1");
+  assertThrows(() => getQuestionnaireDefinition("HOUSEHOLD", "UNKNOWN"));
+  assertUniqueQuestionCodes(definition);
+  assertJsonEqual(definition.sections.map((section) => section.code), ["household.interview", "household.respondent", "household.head_spouse", "household.members_section", "household.structure_occupancy", "household.project_awareness"]);
+
+  const awarenessSource = required(definition.sections.find((section) => section.code === "household.project_awareness")?.questions.find((question) => question.code === "household.project_awareness.source"));
+  const noAwareness = indexResponses([{ questionCode: "household.project_awareness.aware", responseState: "ANSWERED", value: "NO" }]);
+  const yesAwareness = indexResponses([{ questionCode: "household.project_awareness.aware", responseState: "ANSWERED", value: "YES" }]);
+  assertJsonEqual(isQuestionVisible(awarenessSource, noAwareness), false);
+  assertJsonEqual(isQuestionVisible(awarenessSource, yesAwareness), true);
+  assertJsonEqual(isQuestionRequired(awarenessSource, yesAwareness), true);
+  assertJsonEqual(calculateCompletion(definition, [{ questionCode: "household.project_awareness.aware", responseState: "ANSWERED", value: "NO" }]).messages.some((message) => message.code === "household.project_awareness.source"), false);
+
+  const memberResponses = [
+    { questionCode: "household.members.first_name", repeatInstanceId: "member-1", responseState: "ANSWERED" as const, value: "Ana" },
+    { questionCode: "household.members.first_name", repeatInstanceId: "member-2", responseState: "ANSWERED" as const, value: "Ben" }
+  ];
+  const responseMap = indexResponses(memberResponses);
+  assertJsonEqual(responseMap.get("member-1:household.members.first_name")?.value, "Ana");
+  assertJsonEqual(responseMap.get("member-2:household.members.first_name")?.value, "Ben");
+  assertJsonEqual(calculateCompletion(definition, []).completionState, "NOT_STARTED");
+  assertJsonEqual(calculateCompletion(definition, [{ questionCode: "household.respondent.first_name", responseState: "ANSWERED", value: "Ana" }]).completionState, "IN_PROGRESS");
+
+  const completeResponses = [
+    { questionCode: "household.interview.enumerator_name", responseState: "ANSWERED" as const, value: "Enum" },
+    { questionCode: "household.interview.survey_date", responseState: "ANSWERED" as const, value: "2026-01-01" },
+    { questionCode: "household.respondent.last_name", responseState: "ANSWERED" as const, value: "Reyes" },
+    { questionCode: "household.respondent.first_name", responseState: "ANSWERED" as const, value: "Ana" },
+    { questionCode: "household.respondent.relationship_to_head", responseState: "ANSWERED" as const, value: "HOUSEHOLD_HEAD" },
+    { questionCode: "household.head.first_name", responseState: "ANSWERED" as const, value: "Ana" },
+    { questionCode: "household.head.last_name", responseState: "ANSWERED" as const, value: "Reyes" },
+    { questionCode: "household.structure.owns_occupied_structure", responseState: "ANSWERED" as const, value: "YES" },
+    { questionCode: "household.project_awareness.aware", responseState: "ANSWERED" as const, value: "NO" }
+  ];
+  assertJsonEqual(calculateCompletion(definition, completeResponses).completionState, "COMPLETE");
+  assertJsonEqual(buildResponseInput("module-1", "household.members.monthly_income", "MONEY", "1200", "ANSWERED", "member-1"), { interviewModuleId: "module-1", questionCode: "household.members.monthly_income", repeatInstanceId: "member-1", responseState: "ANSWERED", valueNumber: 1200 });
+  assertJsonEqual(buildResponseInput("module-1", "household.members.vulnerabilities", "MULTI_SELECT", ["PWD"], "ANSWERED", "member-1").valueJson, ["PWD"]);
+  assertJsonEqual(isRepeatDeletionAllowed({ groupCode: "household.members", id: "repeat-1", localSyncStatus: "LOCAL_ONLY" }), true);
+  assertJsonEqual(isRepeatDeletionAllowed({ groupCode: "household.members", id: "repeat-1", localSyncStatus: "SYNCED" }), false);
+  const employment = required(definition.repeatGroups[0]?.questions.find((question) => question.code === "household.members.employment_status"));
+  assertJsonEqual(employment.options?.some((option) => option.value === "CONTRACTUAL"), true);
 }
 
 async function assertCreateGraphPayload() {
@@ -165,6 +214,15 @@ function assertJsonEqual(actual: unknown, expected: unknown) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error(`Assertion failed. Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
   }
+}
+
+function assertThrows(fn: () => unknown) {
+  try {
+    fn();
+  } catch {
+    return;
+  }
+  throw new Error("Expected function to throw");
 }
 
 function required<T>(value: T | undefined): T {
