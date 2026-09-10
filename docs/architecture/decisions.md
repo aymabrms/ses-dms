@@ -125,3 +125,21 @@ Sync clients send a UUID `syncRequestId`. The server stores a minimal `SyncReque
 **Status:** Accepted for Phase 4E
 
 Phase 4E does not implement hard delete or tombstone synchronization for questionnaire responses or repeat instances. The first mobile prototype should avoid deleting already-synced records until tombstone semantics are designed.
+
+## ADR-022: Mobile offline storage uses direct Expo SQLite
+
+**Status:** Accepted for Phase 5A
+
+The first mobile offline foundation uses `expo-sqlite` directly with a small migration/repository layer. No heavy mobile ORM is introduced while the local schema and sync contract are still stabilizing.
+
+## ADR-023: Mobile local sync state is separate from server workflow state
+
+**Status:** Accepted for Phase 5A
+
+The mobile app stores local network/sync status separately from server interview/module workflow status. Local states such as `LOCAL_ONLY`, `DIRTY`, `SYNCED`, and `CONFLICT` must not be overloaded with server workflow states such as `DRAFT`, `FOR_VALIDATION`, or `FINALIZED`.
+
+## ADR-024: Phase 5A prepares outbox records but does not process them
+
+**Status:** Accepted for Phase 5A
+
+The mobile app can enqueue module-level sync work in `sync_outbox`, but no background worker, retry loop, or upload to `POST /sync/interviews` is implemented in Phase 5A.

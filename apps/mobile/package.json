@@ -7,12 +7,19 @@
     "dev": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx src/offline-foundation.spec.ts"
   },
   "dependencies": {
     "expo": "^54.0.0",
+    "expo-crypto": "^57.0.2",
+    "expo-sqlite": "^57.0.2",
     "expo-status-bar": "^3.0.8",
     "react": "^19.1.0",
     "react-native": "^0.81.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "tsx": "^4.23.13"
   }
 }
