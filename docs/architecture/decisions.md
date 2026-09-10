@@ -71,3 +71,15 @@ The initial migration adds database-level `CHECK` constraints for relationship r
 **Status:** Accepted for Phase 3C
 
 The seed script creates lookup-set shells and minimal questionnaire-version rows only. It does not seed authoritative civil status, employment status, education, relationship, structure, or land-use values while classification conflicts remain unresolved.
+
+## ADR-013: Phase 4A exposes only core API backbone resources
+
+**Status:** Accepted for Phase 4A
+
+The first API layer exposes Projects, Survey Areas, Users, Questionnaire Versions, Persons, Interviews, and nested Interview Modules only. Household, Business, Land, Structure, ownership, membership, questionnaire response, reporting, synchronization, and review workflow APIs remain deferred.
+
+## ADR-014: DTO validation rejects unknown fields
+
+**Status:** Accepted for Phase 4A
+
+The NestJS API uses a global validation pipe with whitelist, forbidden non-whitelisted fields, and transformation enabled. This keeps Phase 4A REST payloads explicit and prevents accidental acceptance of unsupported questionnaire or workflow data.

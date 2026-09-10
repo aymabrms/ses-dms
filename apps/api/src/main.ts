@@ -5,12 +5,15 @@ import { NestFactory } from "@nestjs/core";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 
 import { AppModule } from "./app.module";
+import { createValidationPipe } from "./app-validation";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.useGlobalPipes(createValidationPipe());
+
   const config = new DocumentBuilder()
     .setTitle("SES/DMS API")
-    .setDescription("Phase 1 API shell")
+    .setDescription("SES/DMS core domain API")
     .setVersion("0.1.0")
     .build();
   const document = SwaggerModule.createDocument(app, config);
