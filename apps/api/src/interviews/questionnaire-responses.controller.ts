@@ -3,6 +3,7 @@ import { ApiTags } from "@nestjs/swagger";
 
 import { CreateRepeatInstanceDto, UpdateRepeatInstanceDto } from "./dto/questionnaire-repeat-instance.dto";
 import { BulkWriteResponsesDto } from "./dto/questionnaire-response.dto";
+import { CreateValidationIssueDto } from "./dto/validation-issue.dto";
 import { QuestionnaireResponsesService } from "./questionnaire-responses.service";
 
 @ApiTags("questionnaire responses")
@@ -43,5 +44,10 @@ export class QuestionnaireResponsesController {
   @Get("validation-issues")
   listValidationIssues(@Param("interviewId", ParseUUIDPipe) interviewId: string, @Param("moduleId", ParseUUIDPipe) moduleId: string) {
     return this.responsesService.listValidationIssues(interviewId, moduleId);
+  }
+
+  @Post("validation-issues")
+  createValidationIssue(@Param("interviewId", ParseUUIDPipe) interviewId: string, @Param("moduleId", ParseUUIDPipe) moduleId: string, @Body() dto: CreateValidationIssueDto) {
+    return this.responsesService.createValidationIssue(interviewId, moduleId, dto);
   }
 }

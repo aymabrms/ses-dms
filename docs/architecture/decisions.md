@@ -107,3 +107,21 @@ Stable SES/DMS domain entities remain normalized, while raw questionnaire respon
 **Status:** Accepted for Phase 4D
 
 Questionnaire responses are logically unique by module, question code, and repeat instance. Because root-level responses have `NULL` repeat instance IDs and PostgreSQL normal unique constraints allow multiple nulls, Phase 4D uses partial unique indexes for root-level and repeated responses.
+
+## ADR-019: Phase 4E sync uses module-level bundles and receipts
+
+**Status:** Accepted for Phase 4E
+
+The first sync contract accepts existing interview/module IDs only and applies each module bundle transactionally. `InterviewModule.revision` remains the conflict token, and one accepted module bundle increments revision exactly once.
+
+## ADR-020: Sync retries use client-generated request receipts
+
+**Status:** Accepted for Phase 4E
+
+Sync clients send a UUID `syncRequestId`. The server stores a minimal `SyncRequest` receipt with request and response JSON; completed duplicate requests return the stored response without applying mutations again.
+
+## ADR-021: Delete/tombstone sync is deferred
+
+**Status:** Accepted for Phase 4E
+
+Phase 4E does not implement hard delete or tombstone synchronization for questionnaire responses or repeat instances. The first mobile prototype should avoid deleting already-synced records until tombstone semantics are designed.

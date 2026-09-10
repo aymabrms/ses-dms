@@ -7,6 +7,7 @@ import { PersonsModule } from "./persons/persons.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ProjectsModule } from "./projects/projects.module";
 import { QuestionnaireVersionsModule } from "./questionnaire-versions/questionnaire-versions.module";
+import { SyncModule } from "./sync/sync.module";
 import { SurveyAreasModule } from "./survey-areas/survey-areas.module";
 import { UsersModule } from "./users/users.module";
 
@@ -20,6 +21,7 @@ import { UsersModule } from "./users/users.module";
     QuestionnaireVersionsModule,
     PersonsModule,
     InterviewsModule,
+    SyncModule,
     DomainModule
   ]
 })

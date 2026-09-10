@@ -2,6 +2,7 @@ import { INestApplication } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { QuestionnaireModuleType, ResponseState, ValidationSeverity } from "@prisma/client";
 import * as assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { AddressInfo } from "node:net";
 
 import { AppModule } from "./app.module";
@@ -27,6 +28,7 @@ const ids = {
   structureOccupancies: [] as string[],
   structureTags: [] as string[],
   structures: [] as string[],
+  syncRequests: [] as string[],
   surveyAreas: [] as string[],
   users: [] as string[],
   validationIssues: [] as string[]
@@ -78,6 +80,17 @@ async function main() {
     await run("no response without value is accepted", testNoResponseWithoutValueAccepted);
     await run("validation issues can be listed", testValidationIssuesListed);
     await run("questionnaire response unknown DTO fields are rejected", testQuestionnaireUnknownFieldsRejected);
+    await run("repeat-instance mutation increments module revision", testRepeatInstanceMutationIncrementsRevision);
+    await run("stale sync module revision returns conflict", testStaleSyncRevisionReturnsConflict);
+    await run("successful sync module bundle increments revision once", testSuccessfulSyncBundleIncrementsOnce);
+    await run("duplicate idempotent sync request does not apply twice", testDuplicateIdempotentSyncRequest);
+    await run("sync request rejects module interview mismatch", testSyncModuleInterviewMismatch);
+    await run("sync bootstrap returns active questionnaire versions", testSyncBootstrapQuestionnaireVersions);
+    await run("sync bootstrap returns lookup sets", testSyncBootstrapLookupSets);
+    await run("sync status returns current module revision", testSyncStatusReturnsModuleRevision);
+    await run("technical validation issue can be created and listed", testValidationIssueCreateApi);
+    await run("technical validation issue is generated for suspicious response", testTechnicalValidationIssueGeneration);
+    await run("sync unknown DTO fields are rejected", testSyncUnknownFieldsRejected);
   } finally {
     await cleanup();
     await app.close();
@@ -191,7 +204,7 @@ async function testQuestionnaireResponseBatchPersists() {
   const repeat = await createRepeatInstance(interview.id, module.id, "household.member");
 
   const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
-    expectedRevision: module.revision,
+    expectedRevision: repeat.moduleRevision,
     responses: [
       { questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, valueText: "Juan" },
       { questionCode: "household.member.age", repeatInstanceId: repeat.id, responseState: ResponseState.ANSWERED, valueNumber: 42 }
@@ -345,6 +358,160 @@ async function testQuestionnaireUnknownFieldsRejected() {
   const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
     expectedRevision: module.revision,
     responses: [{ questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, unexpected: "rejected", valueText: "Juan" }]
+  });
+  await expectStatus(response, 400);
+}
+
+async function testRepeatInstanceMutationIncrementsRevision() {
+  const { interview, module } = await createInterviewModule();
+  const response = await post(`/interviews/${interview.id}/modules/${module.id}/repeat-instances`, { groupCode: "household.member" });
+  await expectStatus(response, 201);
+  const repeat = await response.json();
+  ids.questionnaireRepeatInstances.push(repeat.id);
+  assert.equal(repeat.moduleRevision, module.revision + 1);
+}
+
+async function testStaleSyncRevisionReturnsConflict() {
+  const { interview, module } = await createInterviewModule();
+  const first = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "project.awareness", responseState: ResponseState.ANSWERED, valueBoolean: true }]
+  });
+  await expectStatus(first, 200);
+
+  const response = await post("/sync/interviews", {
+    interviews: [{ interviewId: interview.id, modules: [{ expectedRevision: module.revision, moduleId: module.id, responses: [] }] }],
+    syncRequestId: randomUUID()
+  });
+  await expectStatus(response, 201);
+  const body = await response.json();
+  ids.syncRequests.push(await latestSyncRequestId());
+  assert.equal(body.results[0].status, "CONFLICT");
+}
+
+async function testSuccessfulSyncBundleIncrementsOnce() {
+  const { interview, module } = await createInterviewModule();
+  const repeatId = randomUUID();
+  const response = await post("/sync/interviews", {
+    interviews: [
+      {
+        interviewId: interview.id,
+        modules: [
+          {
+            expectedRevision: module.revision,
+            moduleId: module.id,
+            repeatInstances: [{ groupCode: "household.member", id: repeatId, sequenceNumber: 1 }],
+            responses: [
+              { questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, valueText: "Juan" },
+              { questionCode: "household.member.age", repeatInstanceId: repeatId, responseState: ResponseState.ANSWERED, valueNumber: 42 }
+            ]
+          }
+        ]
+      }
+    ],
+    syncRequestId: randomUUID()
+  });
+  await expectStatus(response, 201);
+  const body = await response.json();
+  ids.syncRequests.push(await latestSyncRequestId());
+  ids.questionnaireRepeatInstances.push(repeatId);
+  assert.equal(body.results[0].status, "ACCEPTED");
+  assert.equal(body.results[0].revision, module.revision + 1);
+}
+
+async function testDuplicateIdempotentSyncRequest() {
+  const { interview, module } = await createInterviewModule();
+  const syncRequestId = randomUUID();
+  const payload = {
+    interviews: [{ interviewId: interview.id, modules: [{ expectedRevision: module.revision, moduleId: module.id, responses: [{ questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, valueText: "Juan" }] }] }],
+    syncRequestId
+  };
+
+  const first = await post("/sync/interviews", payload);
+  await expectStatus(first, 201);
+  const firstBody = await first.json();
+
+  const second = await post("/sync/interviews", payload);
+  await expectStatus(second, 201);
+  const secondBody = await second.json();
+  ids.syncRequests.push(await latestSyncRequestId());
+
+  const status = await get(`/sync/interviews/${interview.id}/status`);
+  await expectStatus(status, 200);
+  const statusBody = await status.json();
+  assert.equal(firstBody.results[0].revision, secondBody.results[0].revision);
+  assert.equal(statusBody.modules[0].revision, module.revision + 1);
+}
+
+async function testSyncModuleInterviewMismatch() {
+  const first = await createInterviewModule();
+  const second = await createInterviewModule();
+  const response = await post("/sync/interviews", {
+    interviews: [{ interviewId: first.interview.id, modules: [{ expectedRevision: second.module.revision, moduleId: second.module.id, responses: [] }] }],
+    syncRequestId: randomUUID()
+  });
+  await expectStatus(response, 400);
+  ids.syncRequests.push(await latestSyncRequestId());
+}
+
+async function testSyncBootstrapQuestionnaireVersions() {
+  const response = await get("/sync/bootstrap");
+  await expectStatus(response, 200);
+  const body = await response.json();
+  assert.ok(body.questionnaireVersions.some((version: { isActive: boolean }) => version.isActive));
+}
+
+async function testSyncBootstrapLookupSets() {
+  const response = await get("/sync/bootstrap");
+  await expectStatus(response, 200);
+  const body = await response.json();
+  assert.ok(body.lookupSets.length > 0);
+}
+
+async function testSyncStatusReturnsModuleRevision() {
+  const { interview, module } = await createInterviewModule();
+  const response = await get(`/sync/interviews/${interview.id}/status`);
+  await expectStatus(response, 200);
+  const body = await response.json();
+  assert.equal(body.modules[0].revision, module.revision);
+}
+
+async function testValidationIssueCreateApi() {
+  const { interview, module } = await createInterviewModule();
+  const response = await post(`/interviews/${interview.id}/modules/${module.id}/validation-issues`, {
+    code: "MANUAL_TECHNICAL_TEST",
+    message: "Manual technical test issue",
+    severity: ValidationSeverity.WARNING
+  });
+  await expectStatus(response, 201);
+  const issue = await response.json();
+  ids.validationIssues.push(issue.id);
+
+  const list = await get(`/interviews/${interview.id}/modules/${module.id}/validation-issues`);
+  await expectStatus(list, 200);
+  const issues = await list.json();
+  assert.equal(issues[0].code, "MANUAL_TECHNICAL_TEST");
+}
+
+async function testTechnicalValidationIssueGeneration() {
+  const { interview, module } = await createInterviewModule();
+  const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED }]
+  });
+  await expectStatus(response, 200);
+
+  const issuesResponse = await get(`/interviews/${interview.id}/modules/${module.id}/validation-issues`);
+  await expectStatus(issuesResponse, 200);
+  const issues = await issuesResponse.json();
+  assert.ok(issues.some((issue: { code: string }) => issue.code === "ANSWERED_WITHOUT_VALUE"));
+}
+
+async function testSyncUnknownFieldsRejected() {
+  const response = await post("/sync/interviews", {
+    interviews: [],
+    syncRequestId: randomUUID(),
+    unexpected: "rejected"
   });
   await expectStatus(response, 400);
 }
@@ -579,10 +746,16 @@ async function createRepeatInstance(interviewId: string, moduleId: string, group
   return repeat;
 }
 
+async function latestSyncRequestId() {
+  const receipt = await prisma.syncRequest.findFirstOrThrow({ orderBy: { createdAt: "desc" } });
+  return receipt.id;
+}
+
 async function cleanup() {
-  await prisma.validationIssue.deleteMany({ where: { id: { in: ids.validationIssues } } });
-  await prisma.questionnaireResponse.deleteMany({ where: { id: { in: ids.questionnaireResponses } } });
-  await prisma.questionnaireRepeatInstance.deleteMany({ where: { id: { in: ids.questionnaireRepeatInstances } } });
+  await prisma.syncRequest.deleteMany({ where: { id: { in: ids.syncRequests } } });
+  await prisma.validationIssue.deleteMany({ where: { OR: [{ id: { in: ids.validationIssues } }, { interviewModuleId: { in: ids.interviewModules } }] } });
+  await prisma.questionnaireResponse.deleteMany({ where: { OR: [{ id: { in: ids.questionnaireResponses } }, { interviewModuleId: { in: ids.interviewModules } }] } });
+  await prisma.questionnaireRepeatInstance.deleteMany({ where: { OR: [{ id: { in: ids.questionnaireRepeatInstances } }, { interviewModuleId: { in: ids.interviewModules } }] } });
   await prisma.structureOccupancy.deleteMany({ where: { id: { in: ids.structureOccupancies } } });
   await prisma.structureAssociation.deleteMany({ where: { id: { in: ids.structureAssociations } } });
   await prisma.structureTag.deleteMany({ where: { id: { in: ids.structureTags } } });

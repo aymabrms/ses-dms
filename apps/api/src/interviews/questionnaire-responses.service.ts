@@ -1,10 +1,11 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { Prisma, ResponseState } from "@prisma/client";
+import { Prisma, ResponseState, ValidationSeverity } from "@prisma/client";
 
 import { throwConflictForUniqueConstraint } from "../common/prisma-errors";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateRepeatInstanceDto, UpdateRepeatInstanceDto } from "./dto/questionnaire-repeat-instance.dto";
 import { BulkWriteResponsesDto, ResponseItemDto } from "./dto/questionnaire-response.dto";
+import { CreateValidationIssueDto } from "./dto/validation-issue.dto";
 
 type ModuleWithInterview = Prisma.InterviewModuleGetPayload<{ include: { interview: true } }>;
 type Tx = Prisma.TransactionClient;
@@ -40,7 +41,8 @@ export class QuestionnaireResponsesService {
         }
 
         for (const response of dto.responses) {
-          await this.writeResponse(tx, moduleId, response);
+          const saved = await this.writeResponse(tx, moduleId, response);
+          await this.createTechnicalIssuesForResponse(tx, interviewId, moduleId, saved.id, response);
         }
 
         const [module, responses] = await Promise.all([
@@ -69,7 +71,11 @@ export class QuestionnaireResponsesService {
   async createRepeatInstance(interviewId: string, moduleId: string, dto: CreateRepeatInstanceDto) {
     const module = await this.ensureModule(interviewId, moduleId);
     await this.validateRepeatInstanceDto(module, dto);
-    return this.prisma.questionnaireRepeatInstance.create({ data: { ...dto, interviewModuleId: moduleId } });
+    return this.prisma.$transaction(async (tx) => {
+      const repeatInstance = await tx.questionnaireRepeatInstance.create({ data: { ...dto, interviewModuleId: moduleId } });
+      const updatedModule = await tx.interviewModule.update({ data: { revision: { increment: 1 } }, where: { id: moduleId } });
+      return { ...repeatInstance, moduleRevision: updatedModule.revision };
+    });
   }
 
   async updateRepeatInstance(interviewId: string, moduleId: string, repeatInstanceId: string, dto: UpdateRepeatInstanceDto) {
@@ -77,7 +83,11 @@ export class QuestionnaireResponsesService {
     const existing = await this.prisma.questionnaireRepeatInstance.findFirst({ where: { id: repeatInstanceId, interviewModuleId: moduleId } });
     if (!existing) throw new NotFoundException("Questionnaire repeat instance not found");
     await this.validateRepeatInstanceDto(module, dto, repeatInstanceId);
-    return this.prisma.questionnaireRepeatInstance.update({ data: dto, where: { id: repeatInstanceId } });
+    return this.prisma.$transaction(async (tx) => {
+      const repeatInstance = await tx.questionnaireRepeatInstance.update({ data: dto, where: { id: repeatInstanceId } });
+      const updatedModule = await tx.interviewModule.update({ data: { revision: { increment: 1 } }, where: { id: moduleId } });
+      return { ...repeatInstance, moduleRevision: updatedModule.revision };
+    });
   }
 
   async listValidationIssues(interviewId: string, moduleId: string) {
@@ -85,6 +95,26 @@ export class QuestionnaireResponsesService {
     return this.prisma.validationIssue.findMany({
       orderBy: { createdAt: "asc" },
       where: { interviewModuleId: moduleId }
+    });
+  }
+
+  async createValidationIssue(interviewId: string, moduleId: string, dto: CreateValidationIssueDto) {
+    await this.ensureModule(interviewId, moduleId);
+
+    if (dto.questionnaireResponseId) {
+      const response = await this.prisma.questionnaireResponse.findFirst({ where: { id: dto.questionnaireResponseId, interviewModuleId: moduleId } });
+      if (!response) throw new BadRequestException("Questionnaire response must belong to the selected interview module");
+    }
+
+    return this.prisma.validationIssue.create({
+      data: {
+        code: dto.code,
+        interviewId,
+        interviewModuleId: moduleId,
+        message: dto.message,
+        questionnaireResponseId: dto.questionnaireResponseId,
+        severity: dto.severity
+      }
     });
   }
 
@@ -104,6 +134,39 @@ export class QuestionnaireResponsesService {
     }
 
     return tx.questionnaireResponse.create({ data });
+  }
+
+  private async createTechnicalIssuesForResponse(tx: Tx, interviewId: string, moduleId: string, responseId: string, response: ResponseItemDto) {
+    const hasValue = this.hasAnyValue(response);
+    if (response.responseState === ResponseState.ANSWERED && !hasValue) {
+      await tx.validationIssue.create({
+        data: {
+          code: "ANSWERED_WITHOUT_VALUE",
+          interviewId,
+          interviewModuleId: moduleId,
+          message: "Response is marked ANSWERED but no value was supplied.",
+          questionnaireResponseId: responseId,
+          severity: ValidationSeverity.WARNING
+        }
+      });
+    }
+
+    if (response.responseState === ResponseState.NO_RESPONSE && hasValue) {
+      await tx.validationIssue.create({
+        data: {
+          code: "NO_RESPONSE_WITH_VALUE",
+          interviewId,
+          interviewModuleId: moduleId,
+          message: "Response is marked NO_RESPONSE but a value was supplied.",
+          questionnaireResponseId: responseId,
+          severity: ValidationSeverity.WARNING
+        }
+      });
+    }
+  }
+
+  private hasAnyValue(response: ResponseItemDto) {
+    return [response.valueText, response.valueNumber, response.valueBoolean, response.valueDate, response.valueJson, response.rawValue].some((value) => value !== undefined && value !== null);
   }
 
   private toResponseData(moduleId: string, response: ResponseItemDto): Prisma.QuestionnaireResponseUncheckedCreateInput {
