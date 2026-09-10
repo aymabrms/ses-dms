@@ -1,0 +1,31 @@
+# Reporting Traceability
+
+The executive summary is a reporting requirement and output template. It is not assumed to be a perfect source of truth. Report denominators and category mappings require domain review.
+
+## Source executive summary outputs
+
+The executive summary file inspected was `C:\app\ses-dms-research\references\SES and DMS - executive summary.pdf`.
+
+| Output | Probable source entity/entities | Probable source questionnaire | Grouping/category field | Required filters | Household head vs member treatment | Denominator/population ambiguity | Known discrepancy or unclear total | Business rule requiring confirmation |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Household Structure | HouseholdMembership, Person | Household | Relationship to household head | Interviewed/complete households; affected population | Must distinguish HHH and HHM if report requires separate columns; relationship report total includes all persons | Questionnaire relationship categories differ from executive summary categories | Executive summary relationship total 3,239 differs from other demographic totals | Which relationship category list is authoritative? |
+| Household Size | Household, HouseholdMembership | Household | Count of members per household | Complete/interviewed households | Head may be counted as member depending rule | Household size total shows 529 households and Total Population 3,154 | Total relationship count 3,239 and age total 3,335 differ from total population 3,154 | How is household size computed and which records are excluded? |
+| Total Affected Population | Household, HouseholdMembership, Interview status | Household, possibly all modules | Population count | Complete plus maybe for-validation categories | Need define whether heads and members are distinct records | Executive summary has multiple population totals | Top status table has blank/zero-looking source values | What is official affected population denominator? |
+| Age Distribution | Person / HouseholdMembership | Household | Age bands | Complete household persons | Executive summary separates Household Head and Household Member | Includes No Response category | Age total 3,335 differs from household size population | Are missing ages included in total denominator? |
+| Sex Disaggregation | Person / HouseholdMembership | Household | Gender/sex | Complete household persons with sex answered | Separate HHH and HHM columns | Persons with missing sex may be excluded | Sex total 3,255 differs from age and population totals | How should No Response/blank sex be reported? |
+| Civil Status | Person / HouseholdMembership | Household | Civil status | Persons with civil status answered | Separate HHH and HHM columns | Missing/no response appears excluded in summary | Civil status total 3,031 differs from other totals | Should minors be Not Applicable or included as Single? |
+| Educational Attainment | Person / HouseholdMembership | Household | Education category | Persons with education answered or applicable | Separate HHH and HHM columns | Below-schooling-age may be Not Applicable but summary shows zero | Education total 2,645 differs substantially from population totals | What age/applicability filter is used for education? |
+| Religious Affiliation | Person / HouseholdMembership | Household | Religion | Persons with religion answered | Separate HHH and HHM columns | Missing religions may be excluded | Religion total 3,202 differs from others | Is religion required for all household members? |
+| Ethnic Group | Person / HouseholdMembership | Household | Ethnicity | Persons with ethnicity answered | Separate HHH and HHM columns | Missing ethnicity may be excluded | Ethnic total 3,129 differs from others | Which ethnicity categories are allowed? |
+| Linguistic Group | Person / HouseholdMembership | Household | Linguistic group | Persons with language answered | Separate HHH and HHM columns | Household questionnaire extraction did not reveal linguistic field | Linguistic total 3,248 differs from others | Where is linguistic group captured in the source questionnaire or encoding sheet? |
+| Employment Status | Employment / HouseholdMembership | Household | Employment status category | Labor-force rules likely apply | Separate HHH and HHM columns in template | Not Applicable/Not in Labor Force split into minors, students/dependents, retired/seniors | Executive summary table is blank in inspected PDF | How do household employment choices map to report employment categories? |
+| Primary Occupation | Employment / Occupation / HouseholdMembership | Household | Occupation major group | Working persons only likely | Separate HHH and HHM columns in template | Denominator may be employed+self-employed only | Executive summary table is blank in inspected PDF | What occupation coding standard and who codes raw occupations? |
+| Monthly Income Distribution | IncomeRecord, Household, Person, Employment | Household | Income bracket | Likely households or working persons; unclear | Executive summary does not split HHH/HHM for income | Total is 463, much lower than population and household totals | Income distribution may exclude non-working/no-response/not applicable | Is this household total monthly income, individual income, or working-person income? |
+| Monthly Expenses Distribution | ExpenseRecord, Household | Household | Expense bracket | Household-level records likely | Not person-level | Denominator should likely be households, but template blank | Executive summary table is blank in inspected PDF | Is this based on household aggregate monthly expenditure bracket or computed category expenses? |
+
+## Reporting principles for later implementation
+
+- Each report must identify source entity, source questionnaire version, denominator, missingness handling, and category mapping.
+- Household head and household member must remain distinguishable for reports even if both are modeled as people.
+- Report category mappings must be reviewed before database design, especially for relationship, employment, education, occupation, income, and expenses.
+- Executive-summary totals are inconsistent across sections, so the system should support traceability from each aggregate back to included records and exclusions.

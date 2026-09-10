@@ -1,0 +1,490 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum QuestionnaireModuleType {
+  HOUSEHOLD
+  BUSINESS
+  LANDOWNER
+}
+
+enum RecordStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum InterviewStatus {
+  DRAFT
+  READY_TO_SYNC
+  SYNCED
+  FOR_VALIDATION
+  RETURNED_FOR_CORRECTION
+  VALIDATED
+  FINALIZED
+}
+
+enum ModuleStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  FOR_VALIDATION
+  RETURNED_FOR_CORRECTION
+  VALIDATED
+  FINALIZED
+}
+
+model Project {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  surveyAreas           SurveyArea[]
+  questionnaireVersions QuestionnaireVersion[]
+  interviews            Interview[]
+  households            Household[]
+  businesses            Business[]
+  landParcels           LandParcel[]
+  structures            Structure[]
+  structureTags         StructureTag[]
+
+  @@map("projects")
+}
+
+model SurveyArea {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String   @db.Uuid
+  code      String?
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  interviews    Interview[]
+  households    Household[]
+  businesses    Business[]
+  landParcels   LandParcel[]
+  structures    Structure[]
+  structureTags StructureTag[]
+
+  @@index([projectId])
+  @@map("survey_areas")
+}
+
+model User {
+  id          String       @id @default(uuid()) @db.Uuid
+  email       String       @unique
+  displayName String
+  status      RecordStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  enumeratedInterviews Interview[] @relation("InterviewEnumerator")
+
+  @@map("users")
+}
+
+model QuestionnaireVersion {
+  id            String                  @id @default(uuid()) @db.Uuid
+  projectId     String?                 @db.Uuid
+  moduleType    QuestionnaireModuleType
+  versionCode   String
+  title         String
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  isActive      Boolean                 @default(true)
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  project          Project?          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  interviewModules InterviewModule[]
+
+  @@index([projectId])
+  @@index([moduleType])
+  @@map("questionnaire_versions")
+}
+
+model Interview {
+  id                 String          @id @default(uuid()) @db.Uuid
+  projectId          String          @db.Uuid
+  surveyAreaId       String          @db.Uuid
+  respondentPersonId String?         @db.Uuid
+  enumeratorUserId   String          @db.Uuid
+  surveyDate         DateTime
+  startedAt          DateTime
+  finishedAt         DateTime?
+  status             InterviewStatus @default(DRAFT)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  surveyArea       SurveyArea        @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
+  respondentPerson Person?           @relation("InterviewRespondent", fields: [respondentPersonId], references: [id], onDelete: Restrict)
+  enumerator       User              @relation("InterviewEnumerator", fields: [enumeratorUserId], references: [id], onDelete: Restrict)
+  modules          InterviewModule[]
+
+  @@index([projectId])
+  @@index([surveyAreaId])
+  @@index([respondentPersonId])
+  @@index([enumeratorUserId])
+  @@map("interviews")
+}
+
+model InterviewModule {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  interviewId            String                  @db.Uuid
+  questionnaireVersionId String                  @db.Uuid
+  moduleType             QuestionnaireModuleType
+  householdId            String?                 @db.Uuid
+  businessId             String?                 @db.Uuid
+  landParcelId           String?                 @db.Uuid
+  structureId            String?                 @db.Uuid
+  status                 ModuleStatus            @default(DRAFT)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+
+  interview            Interview                   @relation(fields: [interviewId], references: [id], onDelete: Restrict)
+  questionnaireVersion QuestionnaireVersion        @relation(fields: [questionnaireVersionId], references: [id], onDelete: Restrict)
+  household            Household?                  @relation(fields: [householdId], references: [id], onDelete: Restrict)
+  business             Business?                   @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  landParcel           LandParcel?                 @relation(fields: [landParcelId], references: [id], onDelete: Restrict)
+  structure            Structure?                  @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  identityObservations PersonIdentityObservation[]
+
+  @@index([interviewId])
+  @@index([questionnaireVersionId])
+  @@index([householdId])
+  @@index([businessId])
+  @@index([landParcelId])
+  @@index([structureId])
+  @@map("interview_modules")
+}
+
+model Person {
+  id                   String    @id @default(uuid()) @db.Uuid
+  firstName            String?
+  middleName           String?
+  lastName             String?
+  maidenName           String?
+  birthDate            DateTime?
+  genderRaw            String?
+  primaryContactNumber String?
+  primaryEmail         String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  respondentInterviews Interview[]                 @relation("InterviewRespondent")
+  identityObservations PersonIdentityObservation[]
+  householdMemberships HouseholdMembership[]
+  businessOwnerships   BusinessOwnership[]
+  businessEmployees    BusinessEmployee[]
+  landOwnerships       LandOwnership[]
+  structureOccupancies StructureOccupancy[]
+
+  @@index([lastName])
+  @@map("persons")
+}
+
+model PersonIdentityObservation {
+  id                String    @id @default(uuid()) @db.Uuid
+  personId          String    @db.Uuid
+  interviewModuleId String?   @db.Uuid
+  firstNameRaw      String?
+  middleNameRaw     String?
+  lastNameRaw       String?
+  maidenNameRaw     String?
+  birthDateCaptured DateTime?
+  birthDateRaw      String?
+  ageCaptured       Int?
+  genderRaw         String?
+  contactNumberRaw  String?
+  emailRaw          String?
+  validIdTypeRaw    String?
+  sourceRoleRaw     String?
+  createdAt         DateTime  @default(now())
+
+  person          Person           @relation(fields: [personId], references: [id], onDelete: Restrict)
+  interviewModule InterviewModule? @relation(fields: [interviewModuleId], references: [id], onDelete: SetNull)
+
+  @@index([personId])
+  @@index([interviewModuleId])
+  @@map("person_identity_observations")
+}
+
+model Household {
+  id           String   @id @default(uuid()) @db.Uuid
+  projectId    String   @db.Uuid
+  surveyAreaId String   @db.Uuid
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project              Project               @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  surveyArea           SurveyArea            @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
+  memberships          HouseholdMembership[]
+  interviewModules     InterviewModule[]
+  structureOccupancies StructureOccupancy[]
+
+  @@index([projectId])
+  @@index([surveyAreaId])
+  @@map("households")
+}
+
+model HouseholdMembership {
+  id                        String   @id @default(uuid()) @db.Uuid
+  householdId               String   @db.Uuid
+  personId                  String   @db.Uuid
+  relationshipToHeadRaw     String?
+  relationshipLookupValueId String?  @db.Uuid
+  memberOrder               Int?
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  household               Household    @relation(fields: [householdId], references: [id], onDelete: Restrict)
+  person                  Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
+  relationshipLookupValue LookupValue? @relation("HouseholdRelationshipLookup", fields: [relationshipLookupValueId], references: [id], onDelete: SetNull)
+
+  @@index([householdId])
+  @@index([personId])
+  @@index([relationshipLookupValueId])
+  @@map("household_memberships")
+}
+
+model Business {
+  id                  String    @id @default(uuid()) @db.Uuid
+  projectId           String    @db.Uuid
+  surveyAreaId        String    @db.Uuid
+  name                String?
+  natureOfBusinessRaw String?
+  ownershipTypeRaw    String?
+  startedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  project              Project              @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  surveyArea           SurveyArea           @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
+  ownerships           BusinessOwnership[]
+  employees            BusinessEmployee[]
+  interviewModules     InterviewModule[]
+  structureOccupancies StructureOccupancy[]
+
+  @@index([projectId])
+  @@index([surveyAreaId])
+  @@map("businesses")
+}
+
+model Organization {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String
+  organizationTypeRaw String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  businessOwnerships BusinessOwnership[]
+  landOwnerships     LandOwnership[]
+
+  @@map("organizations")
+}
+
+model BusinessOwnership {
+  id               String   @id @default(uuid()) @db.Uuid
+  businessId       String   @db.Uuid
+  personId         String?  @db.Uuid
+  organizationId   String?  @db.Uuid
+  ownershipTypeRaw String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  person       Person?       @relation(fields: [personId], references: [id], onDelete: Restrict)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([personId])
+  @@index([organizationId])
+  @@map("business_ownerships")
+}
+
+model BusinessEmployee {
+  id                  String   @id @default(uuid()) @db.Uuid
+  businessId          String   @db.Uuid
+  personId            String   @db.Uuid
+  employmentStatusRaw String?
+  workAssignmentRaw   String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  person   Person   @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@index([businessId])
+  @@index([personId])
+  @@map("business_employees")
+}
+
+model LandParcel {
+  id               String   @id @default(uuid()) @db.Uuid
+  projectId        String   @db.Uuid
+  surveyAreaId     String   @db.Uuid
+  areaValue        Decimal? @db.Decimal(12, 2)
+  areaUnit         String?
+  landUseRaw       String?
+  ownershipTypeRaw String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  surveyArea       SurveyArea        @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
+  ownerships       LandOwnership[]
+  structures       Structure[]
+  interviewModules InterviewModule[]
+
+  @@index([projectId])
+  @@index([surveyAreaId])
+  @@map("land_parcels")
+}
+
+model LandOwnership {
+  id                   String   @id @default(uuid()) @db.Uuid
+  landParcelId         String   @db.Uuid
+  personId             String?  @db.Uuid
+  organizationId       String?  @db.Uuid
+  ownershipTypeRaw     String?
+  proofOfOwnershipRaw  String?
+  acquisitionMethodRaw String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  landParcel   LandParcel    @relation(fields: [landParcelId], references: [id], onDelete: Restrict)
+  person       Person?       @relation(fields: [personId], references: [id], onDelete: Restrict)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([landParcelId])
+  @@index([personId])
+  @@index([organizationId])
+  @@map("land_ownerships")
+}
+
+model Structure {
+  id                    String   @id @default(uuid()) @db.Uuid
+  projectId             String   @db.Uuid
+  surveyAreaId          String   @db.Uuid
+  landParcelId          String?  @db.Uuid
+  structureUseRaw       String?
+  structureTypeRaw      String?
+  structureConditionRaw String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  project                     Project                @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  surveyArea                  SurveyArea             @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
+  landParcel                  LandParcel?            @relation(fields: [landParcelId], references: [id], onDelete: SetNull)
+  tags                        StructureTag[]
+  parentStructureAssociations StructureAssociation[] @relation("ParentStructureAssociation")
+  childStructureAssociations  StructureAssociation[] @relation("ChildStructureAssociation")
+  occupancies                 StructureOccupancy[]
+  interviewModules            InterviewModule[]
+
+  @@index([projectId])
+  @@index([surveyAreaId])
+  @@index([landParcelId])
+  @@map("structures")
+}
+
+model StructureTag {
+  id           String   @id @default(uuid()) @db.Uuid
+  structureId  String   @db.Uuid
+  projectId    String   @db.Uuid
+  surveyAreaId String?  @db.Uuid
+  tagValue     String
+  tagTypeRaw   String?
+  sourceRaw    String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  structure  Structure   @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  surveyArea SurveyArea? @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
+
+  @@index([structureId])
+  @@index([projectId])
+  @@index([surveyAreaId])
+  @@index([tagValue])
+  @@map("structure_tags")
+}
+
+model StructureAssociation {
+  id                 String   @id @default(uuid()) @db.Uuid
+  parentStructureId  String   @db.Uuid
+  childStructureId   String   @db.Uuid
+  associationTypeRaw String?
+  createdAt          DateTime @default(now())
+
+  parentStructure Structure @relation("ParentStructureAssociation", fields: [parentStructureId], references: [id], onDelete: Restrict)
+  childStructure  Structure @relation("ChildStructureAssociation", fields: [childStructureId], references: [id], onDelete: Restrict)
+
+  @@index([parentStructureId])
+  @@index([childStructureId])
+  @@map("structure_associations")
+}
+
+model StructureOccupancy {
+  id               String    @id @default(uuid()) @db.Uuid
+  structureId      String    @db.Uuid
+  householdId      String?   @db.Uuid
+  businessId       String?   @db.Uuid
+  personId         String?   @db.Uuid
+  occupancyTypeRaw String?
+  startedAt        DateTime?
+  endedAt          DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  structure Structure  @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  household Household? @relation(fields: [householdId], references: [id], onDelete: Restrict)
+  business  Business?  @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  person    Person?    @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@index([structureId])
+  @@index([householdId])
+  @@index([businessId])
+  @@index([personId])
+  @@map("structure_occupancies")
+}
+
+model LookupSet {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  values LookupValue[]
+
+  @@map("lookup_sets")
+}
+
+model LookupValue {
+  id          String   @id @default(uuid()) @db.Uuid
+  lookupSetId String   @db.Uuid
+  code        String
+  label       String
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  lookupSet              LookupSet             @relation(fields: [lookupSetId], references: [id], onDelete: Restrict)
+  householdRelationships HouseholdMembership[] @relation("HouseholdRelationshipLookup")
+
+  @@unique([lookupSetId, code])
+  @@index([lookupSetId])
+  @@map("lookup_values")
+}
