@@ -56,6 +56,7 @@ export interface QuestionDefinition {
   repeatGroup?: string;
   domainMapping?: DomainMapping;
   reportingMapping?: ReportingMapping;
+  triggerRecommendation?: { moduleType: QuestionnaireModuleType; message: string; level: "RECOMMENDED" | "OPTIONAL" };
   sourceSection?: string;
   sourceText?: string;
 }
@@ -64,6 +65,7 @@ export interface SectionDefinition {
   code: string;
   title: string;
   description?: string;
+  repeatGroupCode?: string;
   questions: QuestionDefinition[];
 }
 

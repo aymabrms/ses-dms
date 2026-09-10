@@ -86,7 +86,31 @@ function assertQuestionnaireRuntime() {
   assertJsonEqual(definition.id, "household-20220525-v1");
   assertThrows(() => getQuestionnaireDefinition("HOUSEHOLD", "UNKNOWN"));
   assertUniqueQuestionCodes(definition);
-  assertJsonEqual(definition.sections.map((section) => section.code), ["household.interview", "household.respondent", "household.head_spouse", "household.members_section", "household.structure_occupancy", "household.project_awareness"]);
+  assertJsonEqual(definition.sections.map((section) => section.code), [
+    "household.interview",
+    "household.respondent",
+    "household.head_spouse",
+    "household.members_section",
+    "household.expenditure",
+    "household.assets_debt",
+    "household.utilities_services",
+    "household.structure_occupancy",
+    "household.associated_structures_section",
+    "household.land",
+    "household.land.trees_crops_section",
+    "household.livelihood",
+    "household.financial_brackets",
+    "household.relocation",
+    "household.project_awareness",
+    "household.feedback.issues_section",
+    "household.feedback.recommendations_section",
+    "household.feedback.benefits_section",
+    "household.feedback.livelihood_preferences_section",
+    "household.certification"
+  ]);
+  assertJsonEqual(definition.repeatGroups.map((group) => group.code), ["household.members", "household.associated_structures", "household.land.trees_crops", "household.feedback.issues", "household.feedback.recommendations", "household.feedback.benefits", "household.feedback.livelihood_preferences"]);
+  assertJsonEqual(definition.sections.every((section) => !section.repeatGroupCode || definition.repeatGroups.some((group) => group.code === section.repeatGroupCode)), true);
+  assertJsonEqual(definition.sections.find((section) => section.code === "household.expenditure")?.questions.length, 40);
 
   const awarenessSource = required(definition.sections.find((section) => section.code === "household.project_awareness")?.questions.find((question) => question.code === "household.project_awareness.source"));
   const noAwareness = indexResponses([{ questionCode: "household.project_awareness.aware", responseState: "ANSWERED", value: "NO" }]);
@@ -124,6 +148,10 @@ function assertQuestionnaireRuntime() {
   assertJsonEqual(isRepeatDeletionAllowed({ groupCode: "household.members", id: "repeat-1", localSyncStatus: "SYNCED" }), false);
   const employment = required(definition.repeatGroups[0]?.questions.find((question) => question.code === "household.members.employment_status"));
   assertJsonEqual(employment.options?.some((option) => option.value === "CONTRACTUAL"), true);
+  const businessUse = required(definition.repeatGroups.find((group) => group.code === "household.associated_structures")?.questions.find((question) => question.code === "household.associated_structures.used_for_business"));
+  assertJsonEqual(businessUse.triggerRecommendation, { level: "RECOMMENDED", message: "Business questionnaire may be required.", moduleType: "BUSINESS" });
+  const treeRepeat = required(definition.sections.find((section) => section.code === "household.land.trees_crops_section"));
+  assertJsonEqual(treeRepeat.repeatGroupCode, "household.land.trees_crops");
 }
 
 async function assertCreateGraphPayload() {

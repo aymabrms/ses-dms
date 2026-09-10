@@ -9,7 +9,7 @@ import { resolveDefinitionOptions } from "../questionnaires/options";
 import { addRepeatInstanceForGroup, listQuestionnaireResponses, listRepeatInstancesForGroup, LocalRepeatInstanceRow, persistQuestionResponse, removeLocalOnlyRepeatInstance, rowToRuntimeValue } from "../questionnaires/persistence";
 import { getQuestionnaireDefinition } from "../questionnaires/registry";
 import { calculateCompletion, indexResponses, isRepeatDeletionAllowed, RuntimeResponse, responseKey, ValidationMessage } from "../questionnaires/runtime";
-import { QuestionDefinition, QuestionnaireDefinition } from "../questionnaires/types";
+import { QuestionDefinition, QuestionnaireDefinition, RepeatGroupDefinition, SectionDefinition } from "../questionnaires/types";
 
 type ModuleInfo = { id: string; module_type: "HOUSEHOLD"; version_code: string };
 
@@ -17,7 +17,7 @@ export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: s
   const [definition, setDefinition] = useState<QuestionnaireDefinition | null>(null);
   const [moduleInfo, setModuleInfo] = useState<ModuleInfo | null>(null);
   const [responses, setResponses] = useState<RuntimeResponse[]>([]);
-  const [members, setMembers] = useState<LocalRepeatInstanceRow[]>([]);
+  const [repeatInstances, setRepeatInstances] = useState<LocalRepeatInstanceRow[]>([]);
   const [sectionIndex, setSectionIndex] = useState(0);
   const [message, setMessage] = useState("Loading questionnaire...");
   const [saveState, setSaveState] = useState<"Saved locally" | "Saving..." | "Dirty" | "Error">("Saved locally");
@@ -32,11 +32,11 @@ export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: s
     if (info.module_type !== "HOUSEHOLD") throw new Error("Selected module is not a Household module");
     const nextDefinition = await resolveDefinitionOptions(db, getQuestionnaireDefinition(info.module_type, info.version_code));
     const responseRows = await listQuestionnaireResponses(db, moduleId);
-    const repeatRows = await listRepeatInstancesForGroup(db, moduleId, "household.members");
+    const repeatRowsByGroup = await Promise.all(nextDefinition.repeatGroups.map((group) => listRepeatInstancesForGroup(db, moduleId, group.code)));
     setModuleInfo(info);
     setDefinition(nextDefinition);
     setResponses(responseRows.map((row) => ({ questionCode: row.question_code, repeatInstanceId: row.repeat_instance_id, responseState: row.response_state, value: rowToRuntimeValue(row) as RuntimeResponse["value"] })));
-    setMembers(repeatRows);
+    setRepeatInstances(repeatRowsByGroup.flat());
     setMessage("Household definition loaded");
   }, [moduleId]);
 
@@ -44,9 +44,9 @@ export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: s
     refresh().catch((error: unknown) => setMessage(error instanceof Error ? error.message : "Unable to load Household questionnaire"));
   }, [refresh]);
 
-  const completion = useMemo(() => (definition ? calculateCompletion(definition, responses, members.map((member) => ({ groupCode: member.group_code, id: member.id, localSyncStatus: member.local_sync_status, sequenceNumber: member.sequence_number }))) : null), [definition, members, responses]);
+  const completion = useMemo(() => (definition ? calculateCompletion(definition, responses, repeatInstances.map((instance) => ({ groupCode: instance.group_code, id: instance.id, localSyncStatus: instance.local_sync_status, sequenceNumber: instance.sequence_number }))) : null), [definition, repeatInstances, responses]);
   const section = definition?.sections[sectionIndex];
-  const memberGroup = definition?.repeatGroups.find((group) => group.code === "household.members");
+  const sectionRepeatGroup = section?.repeatGroupCode ? definition?.repeatGroups.find((group) => group.code === section.repeatGroupCode) : undefined;
 
   async function save(question: QuestionDefinition, value: unknown, responseState: ResponseState, repeatInstanceId?: string | null) {
     try {
@@ -62,26 +62,27 @@ export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: s
     }
   }
 
-  async function addMember() {
+  async function addRepeat(group: RepeatGroupDefinition) {
     try {
       const db = await getDatabase();
-      await addRepeatInstanceForGroup(db, moduleId, "household.members", members.length + 1);
+      const groupInstances = repeatInstances.filter((instance) => instance.group_code === group.code);
+      await addRepeatInstanceForGroup(db, moduleId, group.code, groupInstances.length + 1);
       setSaveState("Dirty");
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to add household member");
+      setMessage(error instanceof Error ? error.message : "Unable to add repeat item");
     }
   }
 
-  async function removeMember(member: LocalRepeatInstanceRow) {
+  async function removeRepeat(instance: LocalRepeatInstanceRow) {
     try {
-      if (!isRepeatDeletionAllowed({ groupCode: member.group_code, id: member.id, localSyncStatus: member.local_sync_status, sequenceNumber: member.sequence_number })) throw new Error("Already-synced members cannot be deleted until delete/tombstone sync is implemented.");
+      if (!isRepeatDeletionAllowed({ groupCode: instance.group_code, id: instance.id, localSyncStatus: instance.local_sync_status, sequenceNumber: instance.sequence_number })) throw new Error("Already-synced repeat rows cannot be deleted until delete/tombstone sync is implemented.");
       const db = await getDatabase();
-      await removeLocalOnlyRepeatInstance(db, moduleId, member.id);
+      await removeLocalOnlyRepeatInstance(db, moduleId, instance.id);
       setSaveState("Dirty");
       await refresh();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to remove household member");
+      setMessage(error instanceof Error ? error.message : "Unable to remove repeat row");
     }
   }
 
@@ -95,8 +96,6 @@ export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: s
       </SafeAreaView>
     );
   }
-
-  const isMemberSection = section.code === "household.members_section";
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -114,17 +113,11 @@ export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: s
         </View>
         <View style={styles.sectionTabs}>
           {definition.sections.map((candidate, index) => (
-            <Text key={candidate.code} onPress={() => setSectionIndex(index)} style={[styles.sectionTab, index === sectionIndex && styles.sectionTabActive]}>{index + 1}. {candidate.title}</Text>
+            <Text key={candidate.code} onPress={() => setSectionIndex(index)} style={[styles.sectionTab, index === sectionIndex && styles.sectionTabActive]}>{index + 1}. {candidate.title} {sectionStatus(candidate, completion?.messages ?? [])}</Text>
           ))}
         </View>
-        {isMemberSection && memberGroup ? (
-          <View style={styles.sectionWrap}>
-            <Text style={styles.sectionTitle}>{memberGroup.title}</Text>
-            <Text style={styles.message}>{memberGroup.linkedDomainEntity}</Text>
-            <Button title="Add Household Member" onPress={() => void addMember()} />
-            {members.length === 0 ? <Text style={styles.message}>No household members added yet.</Text> : null}
-            {members.map((member, index) => <MemberEditor key={member.id} member={member} index={index} questions={memberGroup.questions} responses={responses} messages={completion?.messages ?? []} onSave={save} onRemove={removeMember} />)}
-          </View>
+        {sectionRepeatGroup ? (
+          <RepeatGroupEditor group={sectionRepeatGroup} instances={repeatInstances.filter((instance) => instance.group_code === sectionRepeatGroup.code)} messages={completion?.messages ?? []} onAdd={() => void addRepeat(sectionRepeatGroup)} onRemove={removeRepeat} onSave={save} responses={responses} section={section} />
         ) : (
           <SectionRenderer section={section} responses={responses} messages={completion?.messages ?? []} onSave={(question, value, state) => void save(question, value, state)} />
         )}
@@ -137,19 +130,45 @@ export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: s
   );
 }
 
-function MemberEditor({ index, member, messages, onRemove, onSave, questions, responses }: { index: number; member: LocalRepeatInstanceRow; messages: ValidationMessage[]; onRemove: (member: LocalRepeatInstanceRow) => void; onSave: (question: QuestionDefinition, value: unknown, responseState: ResponseState, repeatInstanceId?: string | null) => void; questions: QuestionDefinition[]; responses: RuntimeResponse[] }) {
+function RepeatGroupEditor({ group, instances, messages, onAdd, onRemove, onSave, responses, section }: { group: RepeatGroupDefinition; instances: LocalRepeatInstanceRow[]; messages: ValidationMessage[]; onAdd: () => void; onRemove: (instance: LocalRepeatInstanceRow) => void; onSave: (question: QuestionDefinition, value: unknown, responseState: ResponseState, repeatInstanceId?: string | null) => void; responses: RuntimeResponse[]; section: SectionDefinition }) {
+  return (
+    <View style={styles.sectionWrap}>
+      <Text style={styles.sectionTitle}>{group.title}</Text>
+      {section.description ? <Text style={styles.message}>{section.description}</Text> : null}
+      <Text style={styles.message}>{group.linkedDomainEntity}</Text>
+      <Button title={`Add ${singularize(group.title)}`} onPress={onAdd} />
+      {instances.length === 0 ? <Text style={styles.message}>No {group.title.toLowerCase()} added yet.</Text> : null}
+      {instances.map((instance, index) => <RepeatInstanceEditor key={instance.id} group={group} instance={instance} index={index} messages={messages} onRemove={onRemove} onSave={onSave} responses={responses} />)}
+    </View>
+  );
+}
+
+function RepeatInstanceEditor({ group, index, instance, messages, onRemove, onSave, responses }: { group: RepeatGroupDefinition; index: number; instance: LocalRepeatInstanceRow; messages: ValidationMessage[]; onRemove: (instance: LocalRepeatInstanceRow) => void; onSave: (question: QuestionDefinition, value: unknown, responseState: ResponseState, repeatInstanceId?: string | null) => void; responses: RuntimeResponse[] }) {
   const responseMap = indexResponses(responses);
   return (
     <View style={styles.memberCard}>
       <View style={styles.memberHeader}>
-        <Text style={styles.memberTitle}>Member {index + 1}</Text>
-        <Text style={styles.remove} onPress={() => void onRemove(member)}>{isRepeatDeletionAllowed({ groupCode: member.group_code, id: member.id, localSyncStatus: member.local_sync_status, sequenceNumber: member.sequence_number }) ? "Remove" : "Synced: delete blocked"}</Text>
+        <Text style={styles.memberTitle}>{singularize(group.title)} {index + 1}</Text>
+        <Text style={styles.remove} onPress={() => void onRemove(instance)}>{isRepeatDeletionAllowed({ groupCode: instance.group_code, id: instance.id, localSyncStatus: instance.local_sync_status, sequenceNumber: instance.sequence_number }) ? "Remove" : "Synced: delete blocked"}</Text>
       </View>
-      {questions.map((question) => (
-        <QuestionRenderer key={`${member.id}:${question.code}`} question={question} response={responseMap.get(responseKey(question.code, member.id))} messages={messages.filter((message) => message.code === question.code && message.repeatInstanceId === member.id)} onSave={(nextQuestion, value, state) => onSave(nextQuestion, value, state, member.id)} />
+      {group.questions.map((question) => (
+        <QuestionRenderer key={`${instance.id}:${question.code}`} question={question} response={responseMap.get(responseKey(question.code, instance.id))} messages={messages.filter((message) => message.code === question.code && message.repeatInstanceId === instance.id)} onSave={(nextQuestion, value, state) => onSave(nextQuestion, value, state, instance.id)} />
       ))}
     </View>
   );
+}
+
+function sectionStatus(section: SectionDefinition, messages: ValidationMessage[]) {
+  const sectionCodes = new Set(section.questions.map((question) => question.code));
+  const hasErrors = messages.some((message) => sectionCodes.has(message.code));
+  return hasErrors ? "!" : "";
+}
+
+function singularize(title: string) {
+  if (title === "Trees / Crops") return "Tree/Crop";
+  if (title.endsWith("ies")) return `${title.slice(0, -3)}y`;
+  if (title.endsWith("s")) return title.slice(0, -1);
+  return title;
 }
 
 const styles = StyleSheet.create({

@@ -45,6 +45,7 @@ export function QuestionRenderer({ messages = [], onSave, question, response }: 
     <View style={styles.card}>
       <Text style={styles.label}>{question.label}{question.required ? " *" : ""}</Text>
       {question.helpText ? <Text style={styles.help}>{question.helpText}</Text> : null}
+      {question.triggerRecommendation ? <Text style={styles.recommendation}>{question.triggerRecommendation.level}: {question.triggerRecommendation.message}</Text> : null}
       <FieldControl type={question.type} value={draft} options={question.options} onChange={saveImmediate} onBlur={() => onSave(question, normalizeValue(question.type, draft), responseState)} />
       <ResponseStateControl value={responseState} onChange={updateState} />
       {messages.map((message) => <Text key={`${message.code}-${message.message}`} style={message.severity === "WARNING" ? styles.warning : styles.error}>{message.message}</Text>)}
@@ -66,5 +67,6 @@ const styles = StyleSheet.create({
   error: { color: "#a33120", fontSize: 12, marginTop: 4 },
   help: { color: "#607066", lineHeight: 20 },
   label: { color: "#18271f", fontSize: 15, fontWeight: "700" },
+  recommendation: { backgroundColor: "#fff3cd", borderRadius: 8, color: "#6c5300", fontSize: 12, fontWeight: "700", padding: 8 },
   warning: { color: "#8b6508", fontSize: 12, marginTop: 4 }
 });

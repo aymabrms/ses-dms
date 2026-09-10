@@ -173,3 +173,9 @@ Offline-created mobile interview graphs use client-generated UUIDs as the final 
 **Status:** Accepted for Phase 6B
 
 The first dynamic renderer loads versioned questionnaire definitions bundled with the mobile app and resolves them through a registry by `moduleType` and `versionCode`. Definitions drive rendering, simple rules, repeat groups, and completion calculation while existing SQLite response/repeat tables remain the persistence model.
+
+## ADR-030: Phase 6C keeps Household expansion definition-only
+
+**Status:** Accepted for Phase 6C
+
+The fuller Household questionnaire coverage remains bundled in the mobile definition and persists through existing response/repeat tables. Repeat sections are selected through definition metadata, and cross-module cues such as Business recommendations are enumerator-facing only; no backend-driven definition service, new sync contract, new normalized models, or automatic module creation is introduced in Phase 6C.
