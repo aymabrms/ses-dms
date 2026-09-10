@@ -1,5 +1,5 @@
 import { QuestionnaireScreen } from "./QuestionnaireScreen";
 
-export function HouseholdQuestionnaireScreen({ moduleId, onBack }: { moduleId: string; onBack: () => void }) {
+export function BusinessQuestionnaireScreen({ moduleId, onBack }: { moduleId: string; onBack: () => void }) {
   return <QuestionnaireScreen moduleId={moduleId} onBack={onBack} />;
 }

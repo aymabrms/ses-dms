@@ -8,6 +8,7 @@ import { createLocalRepeatInstance, upsertLocalResponse } from "../db/repositori
 import { countTable, listActiveQuestionnaireVersions, listLocalProjects, listLocalSurveyAreas } from "../db/repositories/referenceRepository";
 import { downloadAndImportBootstrap } from "../sync/bootstrap";
 import { processPendingSync, refreshRemoteStatus } from "../sync/foregroundSync";
+import { QuestionnaireModuleType } from "../types/offline";
 
 type Counts = {
   projects: number;
@@ -27,7 +28,7 @@ type InterviewRow = { id: string; project_id: string; survey_area_id: string; lo
 type ModuleRow = { id: string; interview_id: string; local_sync_status: string };
 type RepeatRow = { id: string };
 
-export function OfflineDebugScreen({ onOpenHouseholdModule }: { onOpenHouseholdModule?: (moduleId: string) => void }) {
+export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuestionnaireModule?: (moduleId: string) => void }) {
   const [initialized, setInitialized] = useState(false);
   const [schemaVersion, setSchemaVersion] = useState(0);
   const [counts, setCounts] = useState<Counts>({ conflictOutbox: 0, failedOutbox: 0, interviews: 0, outbox: 0, projects: 0, questionnaireVersions: 0, surveyAreas: 0, syncedModules: 0 });
@@ -82,7 +83,7 @@ export function OfflineDebugScreen({ onOpenHouseholdModule }: { onOpenHouseholdM
     }
   }
 
-  async function createTestInterview() {
+  async function createTestInterview(moduleType: QuestionnaireModuleType = "HOUSEHOLD") {
     try {
       const db = await getDatabase();
       const projects = (await listLocalProjects(db)) as ProjectRow[];
@@ -90,17 +91,17 @@ export function OfflineDebugScreen({ onOpenHouseholdModule }: { onOpenHouseholdM
       const areas = (await listLocalSurveyAreas(db, projects[0].id)) as AreaRow[];
       if (!areas[0]) throw new Error("Run bootstrap first: no local survey area exists");
       const versions = (await listActiveQuestionnaireVersions(db)) as VersionRow[];
-      const householdVersion = versions.find((version) => version.module_type === "HOUSEHOLD") ?? versions[0];
-      if (!householdVersion) throw new Error("Run bootstrap first: no questionnaire version exists");
+      const questionnaireVersion = versions.find((version) => version.module_type === moduleType);
+      if (!questionnaireVersion) throw new Error(`Run bootstrap first: no ${moduleType} questionnaire version exists`);
 
       const interview = (await createLocalInterview(db, { projectId: projects[0].id, surveyAreaId: areas[0].id })) as InterviewRow;
       const module = (await createLocalInterviewModule(db, {
         interviewId: interview.id,
-        moduleType: householdVersion.module_type,
-        questionnaireVersionId: householdVersion.id
+        moduleType: questionnaireVersion.module_type,
+        questionnaireVersionId: questionnaireVersion.id
       })) as ModuleRow;
       setLastModuleId(module.id);
-      setMessage(`Created local interview ${interview.id.slice(0, 8)} and module ${module.id.slice(0, 8)}`);
+      setMessage(`Created local ${moduleType} interview ${interview.id.slice(0, 8)} and module ${module.id.slice(0, 8)}`);
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Create test interview failed");
@@ -140,14 +141,14 @@ export function OfflineDebugScreen({ onOpenHouseholdModule }: { onOpenHouseholdM
     }
   }
 
-  async function openLatestHouseholdModule() {
+  async function openLatestModule(moduleType: QuestionnaireModuleType) {
     try {
       const db = await getDatabase();
-      const module = await db.getFirstAsync<ModuleRow>("SELECT id, interview_id, local_sync_status FROM local_interview_modules WHERE module_type = ? ORDER BY updated_at DESC LIMIT 1", "HOUSEHOLD");
-      if (!module) throw new Error("Create a local Household module first");
-      onOpenHouseholdModule?.(module.id);
+      const module = await db.getFirstAsync<ModuleRow>("SELECT id, interview_id, local_sync_status FROM local_interview_modules WHERE module_type = ? ORDER BY updated_at DESC LIMIT 1", moduleType);
+      if (!module) throw new Error(`Create a local ${moduleType} module first`);
+      onOpenQuestionnaireModule?.(module.id);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Open Household questionnaire failed");
+      setMessage(error instanceof Error ? error.message : `Open ${moduleType} questionnaire failed`);
     }
   }
 
@@ -195,8 +196,10 @@ export function OfflineDebugScreen({ onOpenHouseholdModule }: { onOpenHouseholdM
         <View style={styles.buttons}>
           <Button title="Refresh" onPress={() => void refresh()} />
           <Button title="Bootstrap Reference Data" onPress={() => void bootstrap()} />
-          <Button title="Create Local Test Interview" onPress={() => void createTestInterview()} />
-          <Button title="Open Latest Household Questionnaire" onPress={() => void openLatestHouseholdModule()} />
+          <Button title="Create Local Household Interview" onPress={() => void createTestInterview("HOUSEHOLD")} />
+          <Button title="Create Local Business Interview" onPress={() => void createTestInterview("BUSINESS")} />
+          <Button title="Open Latest Household Questionnaire" onPress={() => void openLatestModule("HOUSEHOLD")} />
+          <Button title="Open Latest Business Questionnaire" onPress={() => void openLatestModule("BUSINESS")} />
           <Button title="Add Repeat + Response" onPress={() => void addRepeatAndResponse()} />
           <Button title="Queue Latest Module" onPress={() => void enqueueLatestModule()} />
           <Button title="Sync Pending" onPress={() => void syncPending()} />

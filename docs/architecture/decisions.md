@@ -179,3 +179,9 @@ The first dynamic renderer loads versioned questionnaire definitions bundled wit
 **Status:** Accepted for Phase 6C
 
 The fuller Household questionnaire coverage remains bundled in the mobile definition and persists through existing response/repeat tables. Repeat sections are selected through definition metadata, and cross-module cues such as Business recommendations are enumerator-facing only; no backend-driven definition service, new sync contract, new normalized models, or automatic module creation is introduced in Phase 6C.
+
+## ADR-031: Phase 6D uses one generic mobile questionnaire screen
+
+**Status:** Accepted for Phase 6D
+
+Household and Business questionnaires use the same `QuestionnaireScreen`, which resolves the bundled definition from the local module type and version code. Module-specific screens may remain as thin wrappers only. Business is added as another versioned bundled definition and continues to persist through existing local response, repeat, dirty-module, and outbox paths without backend, schema, or sync-contract changes.

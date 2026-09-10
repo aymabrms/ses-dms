@@ -1,7 +1,7 @@
 import type { LocalDatabase } from "./db/types";
 import { buildResponseInput } from "./questionnaires/responseMapping";
 import { getQuestionnaireDefinition } from "./questionnaires/registry";
-import { assertUniqueQuestionCodes, calculateCompletion, indexResponses, isQuestionRequired, isQuestionVisible, isRepeatDeletionAllowed } from "./questionnaires/runtime";
+import { assertDefinitionIntegrity, assertUniqueQuestionCodes, calculateCompletion, getRepeatGroup, indexResponses, isQuestionRequired, isQuestionVisible, isRepeatDeletionAllowed, responseKey } from "./questionnaires/runtime";
 import { buildModuleSyncPayload, mapRepeatForSync, mapResponseForSync } from "./sync/payloadBuilder";
 import { buildModuleSyncOutboxPayload } from "./sync/outboxPayload";
 import { processAcceptedModuleResult } from "./sync/syncStateRepository";
@@ -78,6 +78,7 @@ async function main() {
   await assertCompactExistingModulePayload();
   await assertAcceptedCreateReconciliation();
   assertQuestionnaireRuntime();
+  await assertBusinessQuestionnaireRuntime();
   console.log("ok - mobile offline foundation pure checks");
 }
 
@@ -152,6 +153,91 @@ function assertQuestionnaireRuntime() {
   assertJsonEqual(businessUse.triggerRecommendation, { level: "RECOMMENDED", message: "Business questionnaire may be required.", moduleType: "BUSINESS" });
   const treeRepeat = required(definition.sections.find((section) => section.code === "household.land.trees_crops_section"));
   assertJsonEqual(treeRepeat.repeatGroupCode, "household.land.trees_crops");
+}
+
+async function assertBusinessQuestionnaireRuntime() {
+  const householdDefinition = getQuestionnaireDefinition("HOUSEHOLD", "INITIAL");
+  const definition = getQuestionnaireDefinition("BUSINESS", "INITIAL");
+  assertJsonEqual(definition.id, "business-20220525-v1");
+  assertThrows(() => getQuestionnaireDefinition("BUSINESS", "UNKNOWN"));
+  assertDefinitionIntegrity(householdDefinition);
+  assertDefinitionIntegrity(definition);
+  assertUniqueQuestionCodes(definition);
+  assertJsonEqual(definition.sections.map((section) => section.code), [
+    "business.interview",
+    "business.respondent",
+    "business.owner",
+    "business.profile",
+    "business.employees_section",
+    "business.employee_totals",
+    "business.employee_skills",
+    "business.structure_occupancy",
+    "business.land",
+    "business.owner_livelihood",
+    "business.employee_livelihood",
+    "business.project_awareness",
+    "business.feedback.issues_section",
+    "business.feedback.recommendations_section",
+    "business.feedback.benefits_section",
+    "business.feedback.livelihood_preferences_section",
+    "business.certification"
+  ]);
+  assertJsonEqual(definition.repeatGroups.map((group) => group.code), ["business.employees", "business.feedback.issues", "business.feedback.recommendations", "business.feedback.benefits", "business.feedback.livelihood_preferences"]);
+  const employeeGroup = getRepeatGroup(definition, "business.employees");
+  assertJsonEqual(employeeGroup.questions.some((question) => question.code === "business.employees.salary_amount"), true);
+  assertJsonEqual(employeeGroup.questions.some((question) => question.code === "business.employees.salary_frequency"), true);
+
+  const businessSalaryResponses = [
+    { questionCode: "business.employees.salary_amount", repeatInstanceId: "employee-1", responseState: "ANSWERED" as const, value: 500 },
+    { questionCode: "business.employees.salary_frequency", repeatInstanceId: "employee-1", responseState: "ANSWERED" as const, value: "DAILY" },
+    { questionCode: "business.employees.salary_amount", repeatInstanceId: "employee-2", responseState: "ANSWERED" as const, value: 12000 },
+    { questionCode: "business.employees.salary_frequency", repeatInstanceId: "employee-2", responseState: "ANSWERED" as const, value: "MONTHLY" }
+  ];
+  const salaryMap = indexResponses(businessSalaryResponses);
+  assertJsonEqual(salaryMap.get(responseKey("business.employees.salary_amount", "employee-1"))?.value, 500);
+  assertJsonEqual(salaryMap.get(responseKey("business.employees.salary_frequency", "employee-2"))?.value, "MONTHLY");
+
+  const structureRent = required(definition.sections.find((section) => section.code === "business.structure_occupancy")?.questions.find((question) => question.code === "business.structure.monthly_rent"));
+  assertJsonEqual(isQuestionVisible(structureRent, indexResponses([{ questionCode: "business.structure.owns_structure", responseState: "ANSWERED", value: "YES" }])), false);
+  assertJsonEqual(isQuestionVisible(structureRent, indexResponses([{ questionCode: "business.structure.owns_structure", responseState: "ANSWERED", value: "NO" }, { questionCode: "business.structure.occupancy_arrangement", responseState: "ANSWERED", value: "TENANT_RENTER" }])), true);
+  assertJsonEqual(isQuestionRequired(structureRent, indexResponses([{ questionCode: "business.structure.owns_structure", responseState: "ANSWERED", value: "NO" }, { questionCode: "business.structure.occupancy_arrangement", responseState: "ANSWERED", value: "TENANT_RENTER" }])), true);
+
+  const landProof = required(definition.sections.find((section) => section.code === "business.land")?.questions.find((question) => question.code === "business.land.proof"));
+  const landConsent = required(definition.sections.find((section) => section.code === "business.land")?.questions.find((question) => question.code === "business.land.landowner_consent"));
+  assertJsonEqual(isQuestionVisible(landProof, indexResponses([{ questionCode: "business.land.owns_land", responseState: "ANSWERED", value: "YES" }])), true);
+  assertJsonEqual(isQuestionVisible(landConsent, indexResponses([{ questionCode: "business.land.owns_land", responseState: "ANSWERED", value: "YES" }])), false);
+
+  const awarenessSource = required(definition.sections.find((section) => section.code === "business.project_awareness")?.questions.find((question) => question.code === "business.project_awareness.source"));
+  assertJsonEqual(isQuestionVisible(awarenessSource, indexResponses([{ questionCode: "business.project_awareness.aware", responseState: "ANSWERED", value: "NO" }])), false);
+  assertJsonEqual(calculateCompletion(definition, [{ questionCode: "business.project_awareness.aware", responseState: "ANSWERED", value: "NO" }]).messages.some((message) => message.code === "business.project_awareness.source"), false);
+
+  const feedbackResponses = [
+    { questionCode: "business.feedback.issues.text", repeatInstanceId: "issue-1", responseState: "ANSWERED" as const, value: "Delayed compensation" },
+    { questionCode: "business.feedback.issues.text", repeatInstanceId: "issue-2", responseState: "ANSWERED" as const, value: "Employee displacement" }
+  ];
+  assertJsonEqual(indexResponses(feedbackResponses).get(responseKey("business.feedback.issues.text", "issue-2"))?.value, "Employee displacement");
+
+  const completeBusinessResponses = [
+    { questionCode: "business.interview.enumerator_name", responseState: "ANSWERED" as const, value: "Enum" },
+    { questionCode: "business.interview.survey_date", responseState: "ANSWERED" as const, value: "2026-01-01" },
+    { questionCode: "business.respondent.last_name", responseState: "ANSWERED" as const, value: "Reyes" },
+    { questionCode: "business.respondent.first_name", responseState: "ANSWERED" as const, value: "Ana" },
+    { questionCode: "business.respondent.relationship_to_owner", responseState: "ANSWERED" as const, value: "Owner" },
+    { questionCode: "business.owner.last_name", responseState: "ANSWERED" as const, value: "Reyes" },
+    { questionCode: "business.owner.first_name", responseState: "ANSWERED" as const, value: "Ana" },
+    { questionCode: "business.profile.name", responseState: "ANSWERED" as const, value: "Store" },
+    { questionCode: "business.structure.owns_structure", responseState: "ANSWERED" as const, value: "YES" },
+    { questionCode: "business.land.owns_land", responseState: "ANSWERED" as const, value: "YES" },
+    { questionCode: "business.land.proof", responseState: "ANSWERED" as const, value: "Title" },
+    { questionCode: "business.project_awareness.aware", responseState: "ANSWERED" as const, value: "NO" }
+  ];
+  assertJsonEqual(calculateCompletion(definition, []).completionState, "NOT_STARTED");
+  assertJsonEqual(calculateCompletion(definition, completeBusinessResponses).completionState, "COMPLETE");
+  assertJsonEqual(calculateCompletion(definition, completeBusinessResponses, [{ groupCode: "business.employees", id: "employee-1", localSyncStatus: "LOCAL_ONLY" }, { groupCode: "business.employees", id: "employee-2", localSyncStatus: "LOCAL_ONLY" }]).completionState, "IN_PROGRESS");
+
+  assertJsonEqual(buildResponseInput("module-1", "business.profile.name", "TEXT", "Store", "ANSWERED"), { interviewModuleId: "module-1", questionCode: "business.profile.name", repeatInstanceId: null, responseState: "ANSWERED", valueText: "Store" });
+  assertJsonEqual(buildResponseInput("module-1", "business.employees.salary_amount", "MONEY", "500", "ANSWERED", "employee-1"), { interviewModuleId: "module-1", questionCode: "business.employees.salary_amount", repeatInstanceId: "employee-1", responseState: "ANSWERED", valueNumber: 500 });
+  assertJsonEqual(buildModuleSyncOutboxPayload("module-1"), { moduleId: "module-1" });
 }
 
 async function assertCreateGraphPayload() {

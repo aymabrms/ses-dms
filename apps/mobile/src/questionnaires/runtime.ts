@@ -133,6 +133,28 @@ export function assertUniqueQuestionCodes(definition: QuestionnaireDefinition) {
   if (duplicates.length > 0) throw new Error(`Duplicate question code(s): ${[...new Set(duplicates)].join(", ")}`);
 }
 
+export function assertDefinitionIntegrity(definition: QuestionnaireDefinition) {
+  assertUniqueQuestionCodes(definition);
+  const questionCodes = new Set(getAllQuestions(definition).map((question) => question.code));
+  const repeatGroupCodes = definition.repeatGroups.map((group) => group.code);
+  const duplicateRepeatGroups = repeatGroupCodes.filter((code, index) => repeatGroupCodes.indexOf(code) !== index);
+  if (duplicateRepeatGroups.length > 0) throw new Error(`Duplicate repeat group code(s): ${[...new Set(duplicateRepeatGroups)].join(", ")}`);
+
+  const expectedPrefix = definition.moduleType.toLowerCase();
+  for (const question of getAllQuestions(definition)) {
+    if (!question.code.startsWith(`${expectedPrefix}.`)) throw new Error(`${definition.id} question ${question.code} does not use ${expectedPrefix} module prefix`);
+    for (const rule of question.rules ?? []) {
+      if (!questionCodes.has(rule.questionCode)) throw new Error(`${definition.id} rule references unknown question ${rule.questionCode}`);
+    }
+    if (question.optionSource?.type === "LOOKUP_SET" && !question.optionSource.lookupSetCode) throw new Error(`${definition.id} question ${question.code} has LOOKUP_SET without lookupSetCode`);
+    if (question.optionSource?.type === "INLINE_OPTIONS" && (!question.options || question.options.length === 0)) throw new Error(`${definition.id} question ${question.code} has INLINE_OPTIONS without options`);
+    if (question.repeatGroup && !repeatGroupCodes.includes(question.repeatGroup)) throw new Error(`${definition.id} question ${question.code} references unknown repeat group ${question.repeatGroup}`);
+  }
+  for (const section of definition.sections) {
+    if (section.repeatGroupCode && !repeatGroupCodes.includes(section.repeatGroupCode)) throw new Error(`${definition.id} section ${section.code} references unknown repeat group ${section.repeatGroupCode}`);
+  }
+}
+
 export function isRepeatDeletionAllowed(instance: RepeatInstanceRuntime) {
   return instance.localSyncStatus === "LOCAL_ONLY" || instance.localSyncStatus === undefined || instance.localSyncStatus === null;
 }

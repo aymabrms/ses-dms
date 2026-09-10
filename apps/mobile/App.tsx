@@ -2,14 +2,14 @@ import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
 
 import { OfflineDebugScreen } from "./src/screens/OfflineDebugScreen";
-import { HouseholdQuestionnaireScreen } from "./src/screens/HouseholdQuestionnaireScreen";
+import { QuestionnaireScreen } from "./src/screens/QuestionnaireScreen";
 
 export default function App() {
-  const [householdModuleId, setHouseholdModuleId] = useState<string | null>(null);
+  const [questionnaireModuleId, setQuestionnaireModuleId] = useState<string | null>(null);
 
   return (
     <>
-      {householdModuleId ? <HouseholdQuestionnaireScreen moduleId={householdModuleId} onBack={() => setHouseholdModuleId(null)} /> : <OfflineDebugScreen onOpenHouseholdModule={setHouseholdModuleId} />}
+      {questionnaireModuleId ? <QuestionnaireScreen moduleId={questionnaireModuleId} onBack={() => setQuestionnaireModuleId(null)} /> : <OfflineDebugScreen onOpenQuestionnaireModule={setQuestionnaireModuleId} />}
       <StatusBar style="dark" />
     </>
   );
