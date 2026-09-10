@@ -91,3 +91,17 @@ export async function updateLocalInterviewModuleRevision(db: LocalDatabase, modu
 export function markModuleDirty(db: LocalDatabase, moduleId: string) {
   return db.runAsync("UPDATE local_interview_modules SET local_sync_status = ?, updated_at = ? WHERE id = ?", "DIRTY", new Date().toISOString(), moduleId);
 }
+
+export function updateLocalModuleSyncStatus(db: LocalDatabase, moduleId: string, localSyncStatus: LocalSyncStatus) {
+  return db.runAsync("UPDATE local_interview_modules SET local_sync_status = ?, updated_at = ? WHERE id = ?", localSyncStatus, new Date().toISOString(), moduleId);
+}
+
+export function markModuleSynced(db: LocalDatabase, moduleId: string, serverRevision: number) {
+  return db.runAsync("UPDATE local_interview_modules SET server_revision = ?, local_sync_status = ?, updated_at = ? WHERE id = ?", serverRevision, "SYNCED", new Date().toISOString(), moduleId);
+}
+
+export async function updateInterviewLastSyncedAt(db: LocalDatabase, interviewId: string, serverWorkflowStatus?: string | null) {
+  const now = new Date().toISOString();
+  await db.runAsync("UPDATE local_interviews SET last_synced_at = ?, server_workflow_status = COALESCE(?, server_workflow_status), updated_at = ? WHERE id = ?", now, serverWorkflowStatus ?? null, now, interviewId);
+  return getLocalInterview(db, interviewId);
+}

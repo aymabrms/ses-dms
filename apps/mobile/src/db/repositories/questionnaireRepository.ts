@@ -114,3 +114,9 @@ export async function upsertLocalResponse(db: LocalDatabase, input: UpsertLocalR
 export function listLocalResponsesForModule(db: LocalDatabase, interviewModuleId: string) {
   return db.getAllAsync("SELECT * FROM local_questionnaire_responses WHERE interview_module_id = ? ORDER BY question_code ASC, created_at ASC", interviewModuleId);
 }
+
+export async function markModuleQuestionnaireDataSynced(db: LocalDatabase, interviewModuleId: string) {
+  const now = new Date().toISOString();
+  await db.runAsync("UPDATE local_repeat_instances SET local_sync_status = ?, updated_at = ? WHERE interview_module_id = ?", "SYNCED", now, interviewModuleId);
+  await db.runAsync("UPDATE local_questionnaire_responses SET local_sync_status = ?, updated_at = ? WHERE interview_module_id = ?", "SYNCED", now, interviewModuleId);
+}

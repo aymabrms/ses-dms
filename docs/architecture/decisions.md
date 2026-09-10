@@ -143,3 +143,21 @@ The mobile app stores local network/sync status separately from server interview
 **Status:** Accepted for Phase 5A
 
 The mobile app can enqueue module-level sync work in `sync_outbox`, but no background worker, retry loop, or upload to `POST /sync/interviews` is implemented in Phase 5A.
+
+## ADR-025: Phase 5B sync is foreground/manual only
+
+**Status:** Accepted for Phase 5B
+
+The first mobile-to-server synchronization flow processes `SYNC_MODULE` outbox rows only when explicitly triggered from the debug screen. No background worker, automatic retry timer, or hidden retry behavior is introduced.
+
+## ADR-026: Mobile sync retries reuse persisted request IDs
+
+**Status:** Accepted for Phase 5B
+
+Each outbox sync operation stores a `sync_request_id` before the network request. Retries of the same operation reuse that ID so server-side sync receipts can prevent duplicate application.
+
+## ADR-027: Mobile conflicts preserve local edits
+
+**Status:** Accepted for Phase 5B
+
+When the server returns a module revision conflict, the mobile app marks the module and outbox row as conflicted and stores the remote revision on the outbox row. It does not overwrite local responses, repeat instances, or attempt field-level merge.

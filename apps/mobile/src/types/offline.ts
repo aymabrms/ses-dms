@@ -4,7 +4,7 @@ export type ResponseState = "ANSWERED" | "NO_RESPONSE" | "NOT_APPLICABLE" | "UNK
 
 export type LocalSyncStatus = "LOCAL_ONLY" | "DIRTY" | "READY_TO_SYNC" | "SYNCING" | "SYNCED" | "SYNC_FAILED" | "CONFLICT" | "NEEDS_RESYNC";
 
-export type OutboxStatus = "PENDING" | "PROCESSING" | "FAILED" | "COMPLETED";
+export type OutboxStatus = "PENDING" | "SYNCING" | "SYNC_FAILED" | "CONFLICT" | "COMPLETED";
 
 export type OutboxOperation = "UPSERT" | "SYNC_MODULE";
 
@@ -70,4 +70,57 @@ export interface UpsertLocalResponseInput {
   valueJson?: unknown;
   rawValue?: string | null;
   capturedAt?: string | null;
+}
+
+export interface SyncModuleRequestPayload {
+  syncRequestId: string;
+  interviews: Array<{
+    interviewId: string;
+    modules: Array<{
+      moduleId: string;
+      expectedRevision: number;
+      repeatInstances: Array<{
+        id: string;
+        groupCode: string;
+        parentRepeatInstanceId?: string | null;
+        sequenceNumber?: number | null;
+        linkedPersonId?: string | null;
+        linkedHouseholdMembershipId?: string | null;
+        linkedBusinessEmployeeId?: string | null;
+        linkedStructureId?: string | null;
+      }>;
+      responses: Array<{
+        questionCode: string;
+        repeatInstanceId?: string | null;
+        responseState: ResponseState;
+        valueText?: string | null;
+        valueNumber?: number | null;
+        valueBoolean?: boolean | null;
+        valueDate?: string | null;
+        valueJson?: Record<string, unknown> | null;
+        rawValue?: string | null;
+        capturedAt?: string | null;
+      }>;
+    }>;
+  }>;
+}
+
+export type SyncModuleResult =
+  | { interviewId: string; moduleId: string; status: "ACCEPTED"; revision: number }
+  | { interviewId: string; moduleId: string; status: "CONFLICT"; currentRevision: number };
+
+export interface SyncInterviewsResponse {
+  results: SyncModuleResult[];
+}
+
+export interface RemoteInterviewStatus {
+  interviewId: string;
+  status: string;
+  modules: Array<{
+    moduleId: string;
+    moduleStatus: string;
+    moduleType: QuestionnaireModuleType;
+    revision: number;
+    validationIssueCount: number;
+  }>;
 }

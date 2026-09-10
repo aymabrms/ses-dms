@@ -23,7 +23,16 @@ export async function initializeDatabase() {
     if (applied) continue;
 
     await db.withTransactionAsync(async () => {
-      await db.execAsync(migration.sql);
+      if (migration.columns) {
+        for (const column of migration.columns) {
+          const columns = await db.getAllAsync<{ name: string }>(`PRAGMA table_info(${column.table})`);
+          if (!columns.some((existing) => existing.name === column.name)) {
+            await db.execAsync(`ALTER TABLE ${column.table} ADD COLUMN ${column.name} ${column.definition};`);
+          }
+        }
+      } else {
+        await db.execAsync(migration.sql);
+      }
       await db.runAsync("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)", migration.version, new Date().toISOString());
     });
   }

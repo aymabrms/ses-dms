@@ -3,10 +3,11 @@ import { Button, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-
 
 import { getDatabase, getSchemaVersion, initializeDatabase } from "../db/database";
 import { createLocalInterview, createLocalInterviewModule, listLocalInterviews } from "../db/repositories/interviewRepository";
-import { countPendingOutboxItems, enqueueModuleForSync } from "../db/repositories/outboxRepository";
+import { countOutboxItemsByStatus, countPendingOutboxItems, enqueueModuleForSync } from "../db/repositories/outboxRepository";
 import { createLocalRepeatInstance, upsertLocalResponse } from "../db/repositories/questionnaireRepository";
 import { countTable, listActiveQuestionnaireVersions, listLocalProjects, listLocalSurveyAreas } from "../db/repositories/referenceRepository";
 import { downloadAndImportBootstrap } from "../sync/bootstrap";
+import { processPendingSync, refreshRemoteStatus } from "../sync/foregroundSync";
 
 type Counts = {
   projects: number;
@@ -14,6 +15,9 @@ type Counts = {
   questionnaireVersions: number;
   interviews: number;
   outbox: number;
+  failedOutbox: number;
+  conflictOutbox: number;
+  syncedModules: number;
 };
 
 type ProjectRow = { id: string };
@@ -26,7 +30,7 @@ type RepeatRow = { id: string };
 export function OfflineDebugScreen() {
   const [initialized, setInitialized] = useState(false);
   const [schemaVersion, setSchemaVersion] = useState(0);
-  const [counts, setCounts] = useState<Counts>({ interviews: 0, outbox: 0, projects: 0, questionnaireVersions: 0, surveyAreas: 0 });
+  const [counts, setCounts] = useState<Counts>({ conflictOutbox: 0, failedOutbox: 0, interviews: 0, outbox: 0, projects: 0, questionnaireVersions: 0, surveyAreas: 0, syncedModules: 0 });
   const [interviews, setInterviews] = useState<InterviewRow[]>([]);
   const [lastModuleId, setLastModuleId] = useState<string | undefined>();
   const [message, setMessage] = useState("Initializing database...");
@@ -38,21 +42,27 @@ export function OfflineDebugScreen() {
   async function refresh() {
     try {
       const db = await initializeDatabase();
-      const [version, projects, surveyAreas, questionnaireVersions, interviewRows, outbox] = await Promise.all([
+      const [version, projects, surveyAreas, questionnaireVersions, interviewRows, outbox, failedOutbox, conflictOutbox, syncedModules] = await Promise.all([
         getSchemaVersion(),
         countTable(db, "local_projects"),
         countTable(db, "local_survey_areas"),
         countTable(db, "local_questionnaire_versions"),
         listLocalInterviews(db) as Promise<InterviewRow[]>,
-        countPendingOutboxItems(db)
+        countPendingOutboxItems(db),
+        countOutboxItemsByStatus(db, "SYNC_FAILED"),
+        countOutboxItemsByStatus(db, "CONFLICT"),
+        db.getFirstAsync<{ count: number }>("SELECT COUNT(*) as count FROM local_interview_modules WHERE local_sync_status = ?", "SYNCED")
       ]);
       setSchemaVersion(version);
       setCounts({
+        conflictOutbox: conflictOutbox?.count ?? 0,
+        failedOutbox: failedOutbox?.count ?? 0,
         interviews: interviewRows.length,
         outbox: outbox?.count ?? 0,
         projects: projects?.count ?? 0,
         questionnaireVersions: questionnaireVersions?.count ?? 0,
-        surveyAreas: surveyAreas?.count ?? 0
+        surveyAreas: surveyAreas?.count ?? 0,
+        syncedModules: syncedModules?.count ?? 0
       });
       setInterviews(interviewRows);
       setInitialized(true);
@@ -130,6 +140,29 @@ export function OfflineDebugScreen() {
     }
   }
 
+  async function syncPending() {
+    try {
+      const results = await processPendingSync();
+      setMessage(results.length === 0 ? "No pending sync work" : results.map((result) => `${result.status}: ${result.message}`).join("; "));
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Sync pending failed");
+    }
+  }
+
+  async function refreshLatestRemoteStatus() {
+    try {
+      const db = await getDatabase();
+      const interview = (await db.getFirstAsync("SELECT id FROM local_interviews ORDER BY updated_at DESC LIMIT 1")) as InterviewRow | null;
+      if (!interview) throw new Error("Create or mirror an interview first");
+      const status = await refreshRemoteStatus(interview.id);
+      setMessage(`Remote status fetched: ${status.modules.length} module(s)`);
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Refresh sync status failed");
+    }
+  }
+
   return (
     <SafeAreaView style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -144,6 +177,9 @@ export function OfflineDebugScreen() {
           <Text>Questionnaire versions: {counts.questionnaireVersions}</Text>
           <Text>Local interviews: {counts.interviews}</Text>
           <Text>Pending outbox: {counts.outbox}</Text>
+          <Text>Failed outbox: {counts.failedOutbox}</Text>
+          <Text>Conflict outbox: {counts.conflictOutbox}</Text>
+          <Text>Synced modules: {counts.syncedModules}</Text>
         </View>
         <View style={styles.buttons}>
           <Button title="Refresh" onPress={() => void refresh()} />
@@ -151,6 +187,9 @@ export function OfflineDebugScreen() {
           <Button title="Create Local Test Interview" onPress={() => void createTestInterview()} />
           <Button title="Add Repeat + Response" onPress={() => void addRepeatAndResponse()} />
           <Button title="Queue Latest Module" onPress={() => void enqueueLatestModule()} />
+          <Button title="Sync Pending" onPress={() => void syncPending()} />
+          <Button title="Retry Failed" onPress={() => void syncPending()} />
+          <Button title="Refresh Sync Status" onPress={() => void refreshLatestRemoteStatus()} />
         </View>
         {interviews.map((interview) => (
           <View key={interview.id} style={styles.row}>
