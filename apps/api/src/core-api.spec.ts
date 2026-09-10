@@ -83,6 +83,11 @@ async function main() {
     await run("repeat-instance mutation increments module revision", testRepeatInstanceMutationIncrementsRevision);
     await run("stale sync module revision returns conflict", testStaleSyncRevisionReturnsConflict);
     await run("successful sync module bundle increments revision once", testSuccessfulSyncBundleIncrementsOnce);
+    await run("sync can create offline interview graph with client ids", testSyncCreateOfflineInterviewGraph);
+    await run("sync creates business land and structure graph records", testSyncCreateBusinessLandStructureGraph);
+    await run("sync create replay is idempotent", testSyncCreateGraphIdempotentReplay);
+    await run("sync create rollback rejects invalid survey area", testSyncCreateRollbackInvalidSurveyArea);
+    await run("sync create rollback rejects missing questionnaire version", testSyncCreateRollbackMissingQuestionnaireVersion);
     await run("duplicate idempotent sync request does not apply twice", testDuplicateIdempotentSyncRequest);
     await run("sync request rejects module interview mismatch", testSyncModuleInterviewMismatch);
     await run("sync bootstrap returns active questionnaire versions", testSyncBootstrapQuestionnaireVersions);
@@ -417,6 +422,226 @@ async function testSuccessfulSyncBundleIncrementsOnce() {
   ids.questionnaireRepeatInstances.push(repeatId);
   assert.equal(body.results[0].status, "ACCEPTED");
   assert.equal(body.results[0].revision, module.revision + 1);
+}
+
+async function testSyncCreateOfflineInterviewGraph() {
+  const project = await createProject();
+  const surveyArea = await createSurveyArea(project.id);
+  const { user } = await createPersonAndUser();
+  const version = await prisma.questionnaireVersion.findFirstOrThrow({ where: { moduleType: QuestionnaireModuleType.HOUSEHOLD } });
+  const interviewId = randomUUID();
+  const personId = randomUUID();
+  const householdId = randomUUID();
+  const membershipId = randomUUID();
+  const moduleId = randomUUID();
+  const repeatId = randomUUID();
+  const responseId = randomUUID();
+
+  const response = await post("/sync/interviews", {
+    interviews: [
+      {
+        householdMemberships: [{ householdId, id: membershipId, memberOrder: 1, personId, relationshipToHeadRaw: "HEAD" }],
+        households: [{ id: householdId, projectId: project.id, surveyAreaId: surveyArea.id }],
+        interview: {
+          enumeratorUserId: user.id,
+          id: interviewId,
+          projectId: project.id,
+          respondentPersonId: personId,
+          startedAt: new Date().toISOString(),
+          surveyAreaId: surveyArea.id,
+          surveyDate: new Date().toISOString()
+        },
+        modules: [
+          {
+            expectedRevision: 0,
+            householdId,
+            moduleId,
+            moduleType: QuestionnaireModuleType.HOUSEHOLD,
+            questionnaireVersionId: version.id,
+            repeatInstances: [{ groupCode: "household.member", id: repeatId, linkedHouseholdMembershipId: membershipId, linkedPersonId: personId, sequenceNumber: 1 }],
+            responses: [{ id: responseId, questionCode: "household.member.name", repeatInstanceId: repeatId, responseState: ResponseState.ANSWERED, valueText: "Offline respondent" }]
+          }
+        ],
+        persons: [{ firstName: "Offline", id: personId, lastName: "Respondent" }]
+      }
+    ],
+    syncRequestId: randomUUID()
+  });
+
+  await expectStatus(response, 201);
+  ids.syncRequests.push(await latestSyncRequestId());
+  ids.interviews.push(interviewId);
+  ids.persons.push(personId);
+  ids.households.push(householdId);
+  ids.householdMemberships.push(membershipId);
+  ids.interviewModules.push(moduleId);
+  ids.questionnaireRepeatInstances.push(repeatId);
+  ids.questionnaireResponses.push(responseId);
+
+  const body = await response.json();
+  assert.deepEqual(body.results, [{ interviewId, moduleId, revision: 1, status: "ACCEPTED" }]);
+  await prisma.interview.findUniqueOrThrow({ where: { id: interviewId } });
+  await prisma.questionnaireResponse.findUniqueOrThrow({ where: { id: responseId } });
+}
+
+async function testSyncCreateBusinessLandStructureGraph() {
+  const project = await createProject();
+  const surveyArea = await createSurveyArea(project.id);
+  const { user } = await createPersonAndUser();
+  const version = await prisma.questionnaireVersion.findFirstOrThrow({ where: { moduleType: QuestionnaireModuleType.BUSINESS } });
+  const interviewId = randomUUID();
+  const personId = randomUUID();
+  const businessId = randomUUID();
+  const employeeId = randomUUID();
+  const landParcelId = randomUUID();
+  const structureId = randomUUID();
+  const moduleId = randomUUID();
+  const repeatId = randomUUID();
+  const responseId = randomUUID();
+
+  const response = await post("/sync/interviews", {
+    interviews: [
+      {
+        businessEmployees: [{ businessId, employmentStatusRaw: "REGULAR", id: employeeId, personId, workAssignmentRaw: "SALES" }],
+        businesses: [{ id: businessId, name: "Offline Business", projectId: project.id, surveyAreaId: surveyArea.id }],
+        interview: { enumeratorUserId: user.id, id: interviewId, projectId: project.id, startedAt: new Date().toISOString(), surveyAreaId: surveyArea.id, surveyDate: new Date().toISOString() },
+        landParcels: [{ areaUnit: "sqm", areaValue: 25, id: landParcelId, projectId: project.id, surveyAreaId: surveyArea.id }],
+        modules: [
+          {
+            businessId,
+            expectedRevision: 0,
+            landParcelId,
+            moduleId,
+            moduleType: QuestionnaireModuleType.BUSINESS,
+            questionnaireVersionId: version.id,
+            repeatInstances: [{ groupCode: "business.employee", id: repeatId, linkedBusinessEmployeeId: employeeId, sequenceNumber: 1 }],
+            responses: [{ id: responseId, questionCode: "business.name", responseState: ResponseState.ANSWERED, valueText: "Offline Business" }],
+            structureId
+          }
+        ],
+        persons: [{ firstName: "Business", id: personId, lastName: "Worker" }],
+        structures: [{ id: structureId, landParcelId, projectId: project.id, structureTypeRaw: "SHOP", surveyAreaId: surveyArea.id }]
+      }
+    ],
+    syncRequestId: randomUUID()
+  });
+
+  await expectStatus(response, 201);
+  ids.syncRequests.push(await latestSyncRequestId());
+  ids.interviews.push(interviewId);
+  ids.persons.push(personId);
+  ids.businesses.push(businessId);
+  ids.businessEmployees.push(employeeId);
+  ids.landParcels.push(landParcelId);
+  ids.structures.push(structureId);
+  ids.interviewModules.push(moduleId);
+  ids.questionnaireRepeatInstances.push(repeatId);
+  ids.questionnaireResponses.push(responseId);
+
+  const body = await response.json();
+  assert.deepEqual(body.results, [{ interviewId, moduleId, revision: 1, status: "ACCEPTED" }]);
+  assert.equal((await prisma.business.findUniqueOrThrow({ where: { id: businessId } })).id, businessId);
+  assert.equal((await prisma.businessEmployee.findUniqueOrThrow({ where: { id: employeeId } })).id, employeeId);
+  assert.equal((await prisma.landParcel.findUniqueOrThrow({ where: { id: landParcelId } })).id, landParcelId);
+  assert.equal((await prisma.structure.findUniqueOrThrow({ where: { id: structureId } })).id, structureId);
+  assert.equal((await prisma.questionnaireRepeatInstance.findUniqueOrThrow({ where: { id: repeatId } })).id, repeatId);
+  assert.equal((await prisma.questionnaireResponse.findUniqueOrThrow({ where: { id: responseId } })).id, responseId);
+}
+
+async function testSyncCreateGraphIdempotentReplay() {
+  const project = await createProject();
+  const surveyArea = await createSurveyArea(project.id);
+  const { user } = await createPersonAndUser();
+  const version = await prisma.questionnaireVersion.findFirstOrThrow({ where: { moduleType: QuestionnaireModuleType.HOUSEHOLD } });
+  const syncRequestId = randomUUID();
+  const interviewId = randomUUID();
+  const moduleId = randomUUID();
+  const responseId = randomUUID();
+  const payload = {
+    interviews: [
+      {
+        interview: { enumeratorUserId: user.id, id: interviewId, projectId: project.id, startedAt: new Date().toISOString(), surveyAreaId: surveyArea.id, surveyDate: new Date().toISOString() },
+        modules: [{ expectedRevision: 0, moduleId, moduleType: QuestionnaireModuleType.HOUSEHOLD, questionnaireVersionId: version.id, responses: [{ id: responseId, questionCode: "offline.once", responseState: ResponseState.ANSWERED, valueText: "one" }] }]
+      }
+    ],
+    syncRequestId
+  };
+
+  const first = await post("/sync/interviews", payload);
+  await expectStatus(first, 201);
+  const firstBody = await first.json();
+  const second = await post("/sync/interviews", payload);
+  await expectStatus(second, 201);
+  const secondBody = await second.json();
+  ids.syncRequests.push(await latestSyncRequestId());
+  ids.interviews.push(interviewId);
+  ids.interviewModules.push(moduleId);
+  ids.questionnaireResponses.push(responseId);
+
+  assert.deepEqual(secondBody, firstBody);
+  assert.equal(await prisma.interview.count({ where: { id: interviewId } }), 1);
+  assert.equal(await prisma.interviewModule.count({ where: { id: moduleId } }), 1);
+  assert.equal(await prisma.questionnaireResponse.count({ where: { id: responseId } }), 1);
+  assert.equal((await prisma.interviewModule.findUniqueOrThrow({ where: { id: moduleId } })).revision, 1);
+}
+
+async function testSyncCreateRollbackInvalidSurveyArea() {
+  const project = await createProject();
+  const otherProject = await createProject();
+  const otherArea = await createSurveyArea(otherProject.id);
+  const { user } = await createPersonAndUser();
+  const version = await prisma.questionnaireVersion.findFirstOrThrow({ where: { moduleType: QuestionnaireModuleType.HOUSEHOLD } });
+  const interviewId = randomUUID();
+  const personId = randomUUID();
+  const moduleId = randomUUID();
+  const responseId = randomUUID();
+
+  const response = await post("/sync/interviews", {
+    interviews: [
+      {
+        interview: { enumeratorUserId: user.id, id: interviewId, projectId: project.id, respondentPersonId: personId, startedAt: new Date().toISOString(), surveyAreaId: otherArea.id, surveyDate: new Date().toISOString() },
+        modules: [{ expectedRevision: 0, moduleId, moduleType: QuestionnaireModuleType.HOUSEHOLD, questionnaireVersionId: version.id, responses: [{ id: responseId, questionCode: "rollback.invalid_area", responseState: ResponseState.ANSWERED, valueText: "no" }] }],
+        persons: [{ id: personId, firstName: "Rollback" }]
+      }
+    ],
+    syncRequestId: randomUUID()
+  });
+
+  await expectStatus(response, 201);
+  ids.syncRequests.push(await latestSyncRequestId());
+  const body = await response.json();
+  assert.equal(body.results[0].status, "REJECTED");
+  assert.equal(await prisma.interview.count({ where: { id: interviewId } }), 0);
+  assert.equal(await prisma.person.count({ where: { id: personId } }), 0);
+  assert.equal(await prisma.interviewModule.count({ where: { id: moduleId } }), 0);
+  assert.equal(await prisma.questionnaireResponse.count({ where: { id: responseId } }), 0);
+}
+
+async function testSyncCreateRollbackMissingQuestionnaireVersion() {
+  const project = await createProject();
+  const surveyArea = await createSurveyArea(project.id);
+  const { user } = await createPersonAndUser();
+  const interviewId = randomUUID();
+  const moduleId = randomUUID();
+  const responseId = randomUUID();
+
+  const response = await post("/sync/interviews", {
+    interviews: [
+      {
+        interview: { enumeratorUserId: user.id, id: interviewId, projectId: project.id, startedAt: new Date().toISOString(), surveyAreaId: surveyArea.id, surveyDate: new Date().toISOString() },
+        modules: [{ expectedRevision: 0, moduleId, moduleType: QuestionnaireModuleType.HOUSEHOLD, questionnaireVersionId: randomUUID(), responses: [{ id: responseId, questionCode: "rollback.missing_version", responseState: ResponseState.ANSWERED, valueText: "no" }] }]
+      }
+    ],
+    syncRequestId: randomUUID()
+  });
+
+  await expectStatus(response, 201);
+  ids.syncRequests.push(await latestSyncRequestId());
+  const body = await response.json();
+  assert.equal(body.results[0].status, "REJECTED");
+  assert.equal(await prisma.interview.count({ where: { id: interviewId } }), 0);
+  assert.equal(await prisma.interviewModule.count({ where: { id: moduleId } }), 0);
+  assert.equal(await prisma.questionnaireResponse.count({ where: { id: responseId } }), 0);
 }
 
 async function testDuplicateIdempotentSyncRequest() {

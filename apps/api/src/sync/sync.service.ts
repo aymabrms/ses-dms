@@ -2,7 +2,23 @@ import { BadRequestException, ConflictException, Inject, Injectable, NotFoundExc
 import { Prisma, ResponseState, SyncRequestStatus, ValidationSeverity } from "@prisma/client";
 
 import { PrismaService } from "../prisma/prisma.service";
-import { SyncBootstrapQueryDto, SyncInterviewsDto, SyncModuleDto, SyncRepeatInstanceDto, SyncResponseDto } from "./dto/sync.dto";
+import {
+  SyncBootstrapQueryDto,
+  SyncBusinessDto,
+  SyncBusinessEmployeeDto,
+  SyncCreateModuleDto,
+  SyncHouseholdMembershipDto,
+  SyncInterviewCreateDto,
+  SyncInterviewDto,
+  SyncInterviewsDto,
+  SyncLandParcelDto,
+  SyncModuleDto,
+  SyncPersonDto,
+  SyncProjectAreaRecordDto,
+  SyncRepeatInstanceDto,
+  SyncResponseDto,
+  SyncStructureDto
+} from "./dto/sync.dto";
 
 type Tx = Prisma.TransactionClient;
 type ModuleWithInterview = Prisma.InterviewModuleGetPayload<{ include: { interview: true } }>;
@@ -63,8 +79,13 @@ export class SyncService {
     try {
       const results = [] as Array<Record<string, unknown>>;
       for (const interview of dto.interviews) {
-        for (const module of interview.modules) {
-          results.push(await this.syncModule(interview.interviewId, module));
+        if (interview.interview) {
+          results.push(...(await this.createInterviewGraph(interview)));
+        } else {
+          if (!interview.interviewId) throw new BadRequestException("interviewId is required for existing interview sync");
+          for (const module of interview.modules) {
+            results.push(await this.syncModule(interview.interviewId, module));
+          }
         }
       }
 
@@ -120,6 +141,158 @@ export class SyncService {
     });
   }
 
+  private async createInterviewGraph(dto: SyncInterviewDto) {
+    if (!dto.interview) throw new BadRequestException("interview is required for create-on-sync");
+    const interview = dto.interview;
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await this.validateCreateGraphReferences(tx, dto);
+
+        for (const person of dto.persons ?? []) await this.upsertPerson(tx, person);
+
+        await this.upsertInterview(tx, interview);
+
+        for (const household of dto.households ?? []) await this.upsertHousehold(tx, household, interview.projectId);
+        for (const business of dto.businesses ?? []) await this.upsertBusiness(tx, business, interview.projectId);
+        for (const land of dto.landParcels ?? []) await this.upsertLandParcel(tx, land, interview.projectId);
+        for (const structure of dto.structures ?? []) await this.upsertStructure(tx, structure, interview.projectId);
+        for (const membership of dto.householdMemberships ?? []) await this.upsertHouseholdMembership(tx, membership);
+        for (const employee of dto.businessEmployees ?? []) await this.upsertBusinessEmployee(tx, employee);
+
+        const results = [] as Array<Record<string, unknown>>;
+        for (const module of dto.modules) {
+          const createdModule = await this.upsertInterviewModule(tx, interview.id, module);
+          for (const repeat of module.repeatInstances ?? []) await this.upsertRepeatInstance(tx, createdModule.id, repeat);
+          await this.validateResponseRepeatReferences(tx, createdModule.id, module.responses ?? []);
+          for (const response of module.responses ?? []) {
+            const saved = await this.writeResponse(tx, createdModule.id, response);
+            await this.createTechnicalIssuesForResponse(tx, interview.id, createdModule.id, saved.id, response);
+          }
+          results.push({ interviewId: interview.id, moduleId: createdModule.id, revision: createdModule.revision, status: "ACCEPTED" });
+        }
+
+        return results;
+      });
+    } catch (error) {
+      return [
+        {
+          interviewId: dto.interview.id,
+          message: error instanceof Error ? error.message : "Create-on-sync rejected",
+          status: "REJECTED"
+        }
+      ];
+    }
+  }
+
+  private async validateCreateGraphReferences(tx: Tx, dto: SyncInterviewDto) {
+    const interview = dto.interview;
+    if (!interview) throw new BadRequestException("interview is required for create-on-sync");
+
+    const [project, surveyArea, enumerator, respondent] = await Promise.all([
+      tx.project.findUnique({ where: { id: interview.projectId } }),
+      tx.surveyArea.findUnique({ where: { id: interview.surveyAreaId } }),
+      tx.user.findUnique({ where: { id: interview.enumeratorUserId } }),
+      interview.respondentPersonId ? tx.person.findUnique({ where: { id: interview.respondentPersonId } }) : Promise.resolve(null)
+    ]);
+
+    if (!project) throw new BadRequestException("Referenced project does not exist");
+    if (!surveyArea) throw new BadRequestException("Referenced survey area does not exist");
+    if (surveyArea.projectId !== interview.projectId) throw new BadRequestException("Survey area must belong to the selected project");
+    if (!enumerator) throw new BadRequestException("Referenced enumerator user does not exist");
+
+    const bundlePersonIds = new Set((dto.persons ?? []).map((person) => person.id));
+    if (interview.respondentPersonId && !respondent && !bundlePersonIds.has(interview.respondentPersonId)) throw new BadRequestException("Referenced respondent person does not exist");
+
+    for (const module of dto.modules) {
+      if (!module.moduleType) throw new BadRequestException("moduleType is required when creating a module");
+      if (!module.questionnaireVersionId) throw new BadRequestException("questionnaireVersionId is required when creating a module");
+      this.validateResponseItems(module.responses ?? []);
+      const version = await tx.questionnaireVersion.findUnique({ where: { id: module.questionnaireVersionId } });
+      if (!version) throw new BadRequestException("Referenced questionnaire version does not exist");
+      if (version.moduleType !== module.moduleType) throw new BadRequestException("Module type must match questionnaire version module type");
+    }
+  }
+
+  private async upsertPerson(tx: Tx, person: SyncPersonDto) {
+    const data = {
+      birthDate: person.birthDate ? new Date(person.birthDate) : null,
+      firstName: person.firstName ?? null,
+      genderRaw: person.genderRaw ?? null,
+      id: person.id,
+      lastName: person.lastName ?? null,
+      maidenName: person.maidenName ?? null,
+      middleName: person.middleName ?? null,
+      primaryContactNumber: person.primaryContactNumber ?? null,
+      primaryEmail: person.primaryEmail ?? null
+    };
+    return tx.person.upsert({ create: data, update: data, where: { id: person.id } });
+  }
+
+  private async upsertInterview(tx: Tx, interview: SyncInterviewCreateDto) {
+    const data = {
+      enumeratorUserId: interview.enumeratorUserId,
+      finishedAt: interview.finishedAt ? new Date(interview.finishedAt) : null,
+      id: interview.id,
+      projectId: interview.projectId,
+      respondentPersonId: interview.respondentPersonId ?? null,
+      startedAt: new Date(interview.startedAt),
+      surveyAreaId: interview.surveyAreaId,
+      surveyDate: new Date(interview.surveyDate)
+    };
+    return tx.interview.upsert({ create: data, update: data, where: { id: interview.id } });
+  }
+
+  private async upsertHousehold(tx: Tx, household: SyncProjectAreaRecordDto, expectedProjectId: string) {
+    this.validateProjectAreaRecord(household, expectedProjectId);
+    return tx.household.upsert({ create: household, update: household, where: { id: household.id } });
+  }
+
+  private async upsertBusiness(tx: Tx, business: SyncBusinessDto, expectedProjectId: string) {
+    this.validateProjectAreaRecord(business, expectedProjectId);
+    const data = { ...business, startedAt: business.startedAt ? new Date(business.startedAt) : null };
+    return tx.business.upsert({ create: data, update: data, where: { id: business.id } });
+  }
+
+  private async upsertLandParcel(tx: Tx, land: SyncLandParcelDto, expectedProjectId: string) {
+    this.validateProjectAreaRecord(land, expectedProjectId);
+    return tx.landParcel.upsert({ create: land, update: land, where: { id: land.id } });
+  }
+
+  private async upsertStructure(tx: Tx, structure: SyncStructureDto, expectedProjectId: string) {
+    this.validateProjectAreaRecord(structure, expectedProjectId);
+    return tx.structure.upsert({ create: structure, update: structure, where: { id: structure.id } });
+  }
+
+  private async upsertHouseholdMembership(tx: Tx, membership: SyncHouseholdMembershipDto) {
+    return tx.householdMembership.upsert({ create: membership, update: membership, where: { id: membership.id } });
+  }
+
+  private async upsertBusinessEmployee(tx: Tx, employee: SyncBusinessEmployeeDto) {
+    return tx.businessEmployee.upsert({ create: employee, update: employee, where: { id: employee.id } });
+  }
+
+  private async upsertInterviewModule(tx: Tx, interviewId: string, module: SyncCreateModuleDto) {
+    if (!module.moduleType || !module.questionnaireVersionId) throw new BadRequestException("moduleType and questionnaireVersionId are required when creating a module");
+    const data = {
+      businessId: module.businessId ?? null,
+      householdId: module.householdId ?? null,
+      id: module.moduleId,
+      interviewId,
+      landParcelId: module.landParcelId ?? null,
+      moduleType: module.moduleType,
+      questionnaireVersionId: module.questionnaireVersionId,
+      revision: 1,
+      status: module.status ?? "DRAFT",
+      structureId: module.structureId ?? null
+    };
+    return tx.interviewModule.upsert({ create: data, update: data, where: { id: module.moduleId } });
+  }
+
+  private validateProjectAreaRecord(record: SyncProjectAreaRecordDto, expectedProjectId: string) {
+    if (record.projectId !== expectedProjectId) throw new BadRequestException("Created records must belong to the interview project");
+  }
+
   private async upsertRepeatInstance(tx: Tx, moduleId: string, repeat: SyncRepeatInstanceDto) {
     const data = { ...repeat, interviewModuleId: moduleId };
     if (!repeat.id) return tx.questionnaireRepeatInstance.create({ data });
@@ -142,6 +315,7 @@ export class SyncService {
   private toResponseData(moduleId: string, response: SyncResponseDto): Prisma.QuestionnaireResponseUncheckedCreateInput {
     return {
       capturedAt: response.capturedAt ? new Date(response.capturedAt) : null,
+      id: response.id,
       interviewModuleId: moduleId,
       questionCode: response.questionCode,
       rawValue: response.rawValue ?? null,

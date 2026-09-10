@@ -1,4 +1,4 @@
-import { LocalDatabase } from "../database";
+import type { LocalDatabase } from "../types";
 import { CreateLocalInterviewInput, CreateLocalInterviewModuleInput, LocalSyncStatus } from "../../types/offline";
 import { createUuid } from "../../utils/uuid";
 

@@ -161,3 +161,9 @@ Each outbox sync operation stores a `sync_request_id` before the network request
 **Status:** Accepted for Phase 5B
 
 When the server returns a module revision conflict, the mobile app marks the module and outbox row as conflicted and stores the remote revision on the outbox row. It does not overwrite local responses, repeat instances, or attempt field-level merge.
+
+## ADR-028: Phase 5C create-on-sync preserves client UUIDs
+
+**Status:** Accepted for Phase 5C
+
+Offline-created mobile interview graphs use client-generated UUIDs as the final server IDs. The server validates server-owned references, creates each new interview graph transactionally, initializes new modules at revision `1`, and returns per-graph `REJECTED` results for invalid create bundles without ID remapping.

@@ -50,13 +50,18 @@ export async function processOutboxItem(outboxId: string): Promise<SyncProcessin
   try {
     const payload = await buildModuleSyncPayload(db, item.module_id, syncRequestId);
     const response = await postSyncInterviews(payload);
-    const result = response.results.find((candidate) => candidate.moduleId === item.module_id);
+    const rejected = response.results.find((candidate) => candidate.status === "REJECTED");
+    if (rejected) throw new Error(rejected.message);
+
+    const result = response.results.find((candidate) => candidate.status !== "REJECTED" && candidate.moduleId === item.module_id);
     if (!result) throw new Error("Sync response did not include the requested module result");
 
     if (result.status === "ACCEPTED") {
       await processAcceptedModuleResult(db, item.id, item.module_id, result.interviewId, result.revision);
       return { message: "Module synced", moduleId: item.module_id, outboxId: item.id, revision: result.revision, status: "ACCEPTED" };
     }
+
+    if (result.status !== "CONFLICT") throw new Error("Sync response did not include a usable module result");
 
     const message = `Server revision is ${result.currentRevision}; local changes were not applied.`;
     await db.withTransactionAsync(async () => {

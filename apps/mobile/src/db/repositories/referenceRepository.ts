@@ -1,4 +1,4 @@
-import { LocalDatabase } from "../database";
+import type { LocalDatabase } from "../types";
 import { BootstrapPayload } from "../../types/offline";
 
 export async function importBootstrapData(db: LocalDatabase, payload: BootstrapPayload) {

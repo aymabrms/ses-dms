@@ -1,4 +1,4 @@
-import { LocalDatabase } from "../database";
+import type { LocalDatabase } from "../types";
 import { OutboxOperation, OutboxStatus } from "../../types/offline";
 import { createUuid } from "../../utils/uuid";
 import { buildModuleSyncOutboxPayload } from "../../sync/outboxPayload";

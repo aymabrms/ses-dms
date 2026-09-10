@@ -75,10 +75,33 @@ export interface UpsertLocalResponseInput {
 export interface SyncModuleRequestPayload {
   syncRequestId: string;
   interviews: Array<{
-    interviewId: string;
+    interviewId?: string;
+    interview?: {
+      id: string;
+      projectId: string;
+      surveyAreaId: string;
+      enumeratorUserId: string;
+      respondentPersonId?: string | null;
+      surveyDate: string;
+      startedAt: string;
+      finishedAt?: string | null;
+    };
+    persons?: Array<Record<string, unknown>>;
+    households?: Array<Record<string, unknown>>;
+    householdMemberships?: Array<Record<string, unknown>>;
+    businesses?: Array<Record<string, unknown>>;
+    businessEmployees?: Array<Record<string, unknown>>;
+    landParcels?: Array<Record<string, unknown>>;
+    structures?: Array<Record<string, unknown>>;
     modules: Array<{
       moduleId: string;
       expectedRevision: number;
+      moduleType?: QuestionnaireModuleType;
+      questionnaireVersionId?: string;
+      householdId?: string | null;
+      businessId?: string | null;
+      landParcelId?: string | null;
+      structureId?: string | null;
       repeatInstances: Array<{
         id: string;
         groupCode: string;
@@ -90,6 +113,7 @@ export interface SyncModuleRequestPayload {
         linkedStructureId?: string | null;
       }>;
       responses: Array<{
+        id?: string;
         questionCode: string;
         repeatInstanceId?: string | null;
         responseState: ResponseState;
@@ -107,7 +131,8 @@ export interface SyncModuleRequestPayload {
 
 export type SyncModuleResult =
   | { interviewId: string; moduleId: string; status: "ACCEPTED"; revision: number }
-  | { interviewId: string; moduleId: string; status: "CONFLICT"; currentRevision: number };
+  | { interviewId: string; moduleId: string; status: "CONFLICT"; currentRevision: number }
+  | { interviewId: string; status: "REJECTED"; message: string };
 
 export interface SyncInterviewsResponse {
   results: SyncModuleResult[];

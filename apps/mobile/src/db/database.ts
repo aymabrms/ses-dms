@@ -1,8 +1,7 @@
 import * as SQLite from "expo-sqlite";
 
 import { localMigrations } from "./migrations";
-
-export type LocalDatabase = SQLite.SQLiteDatabase;
+import type { LocalDatabase } from "./types";
 
 const DATABASE_NAME = "ses_dms_mobile.db";
 
@@ -10,7 +9,7 @@ let databasePromise: Promise<SQLite.SQLiteDatabase> | undefined;
 
 export async function getDatabase() {
   databasePromise ??= SQLite.openDatabaseAsync(DATABASE_NAME);
-  return databasePromise;
+  return databasePromise as Promise<LocalDatabase>;
 }
 
 export async function initializeDatabase() {

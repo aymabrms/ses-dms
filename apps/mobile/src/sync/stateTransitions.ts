@@ -2,11 +2,16 @@ import { LocalSyncStatus, OutboxStatus, SyncModuleResult } from "../types/offlin
 
 export type SyncOutcome =
   | { kind: "ACCEPTED"; moduleStatus: LocalSyncStatus; outboxStatus: OutboxStatus; serverRevision: number }
-  | { kind: "CONFLICT"; moduleStatus: LocalSyncStatus; outboxStatus: OutboxStatus; currentRevision: number; message: string };
+  | { kind: "CONFLICT"; moduleStatus: LocalSyncStatus; outboxStatus: OutboxStatus; currentRevision: number; message: string }
+  | { kind: "REJECTED"; moduleStatus: LocalSyncStatus; outboxStatus: OutboxStatus; message: string };
 
 export function deriveSyncOutcome(result: SyncModuleResult): SyncOutcome {
   if (result.status === "ACCEPTED") {
     return { kind: "ACCEPTED", moduleStatus: "SYNCED", outboxStatus: "COMPLETED", serverRevision: result.revision };
+  }
+
+  if (result.status === "REJECTED") {
+    return { kind: "REJECTED", message: result.message, moduleStatus: "SYNC_FAILED", outboxStatus: "SYNC_FAILED" };
   }
 
   return {
