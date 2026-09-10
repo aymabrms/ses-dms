@@ -1,6 +1,6 @@
 import { INestApplication } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
-import { QuestionnaireModuleType } from "@prisma/client";
+import { QuestionnaireModuleType, ResponseState, ValidationSeverity } from "@prisma/client";
 import * as assert from "node:assert/strict";
 import { AddressInfo } from "node:net";
 
@@ -10,6 +10,7 @@ import { PrismaService } from "./prisma/prisma.service";
 
 const ids = {
   interviews: [] as string[],
+  interviewModules: [] as string[],
   businesses: [] as string[],
   businessEmployees: [] as string[],
   businessOwnerships: [] as string[],
@@ -20,12 +21,15 @@ const ids = {
   organizations: [] as string[],
   persons: [] as string[],
   projects: [] as string[],
+  questionnaireRepeatInstances: [] as string[],
+  questionnaireResponses: [] as string[],
   structureAssociations: [] as string[],
   structureOccupancies: [] as string[],
   structureTags: [] as string[],
   structures: [] as string[],
   surveyAreas: [] as string[],
-  users: [] as string[]
+  users: [] as string[],
+  validationIssues: [] as string[]
 };
 
 let app: INestApplication;
@@ -62,6 +66,18 @@ async function main() {
     await run("structure occupancy requires exactly one occupant", testStructureOccupancyXor);
     await run("structure occupancy rejects cross-project household", testStructureOccupancyCrossProjectHousehold);
     await run("interview module rejects clear context mismatch", testInterviewModuleContextMismatch);
+    await run("questionnaire response batch persists successfully", testQuestionnaireResponseBatchPersists);
+    await run("module revision increments after response write", testQuestionnaireResponseRevisionIncrements);
+    await run("wrong expected revision returns conflict", testQuestionnaireResponseRevisionConflict);
+    await run("duplicate response key updates safely", testDuplicateQuestionnaireResponseUpdates);
+    await run("response rejects repeat instance from another module", testResponseRepeatInstanceModuleMismatch);
+    await run("repeat instance can be created", testRepeatInstanceCreation);
+    await run("repeat instance parent must belong to same module", testRepeatInstanceParentModuleMismatch);
+    await run("repeat instance self-parent is rejected", testRepeatInstanceSelfParentRejected);
+    await run("answered response with conflicting typed values is rejected", testConflictingTypedValuesRejected);
+    await run("no response without value is accepted", testNoResponseWithoutValueAccepted);
+    await run("validation issues can be listed", testValidationIssuesListed);
+    await run("questionnaire response unknown DTO fields are rejected", testQuestionnaireUnknownFieldsRejected);
   } finally {
     await cleanup();
     await app.close();
@@ -166,6 +182,169 @@ async function testInterviewModuleContextMismatch() {
     businessId: business.id,
     moduleType: QuestionnaireModuleType.HOUSEHOLD,
     questionnaireVersionId: version.id
+  });
+  await expectStatus(response, 400);
+}
+
+async function testQuestionnaireResponseBatchPersists() {
+  const { interview, module } = await createInterviewModule();
+  const repeat = await createRepeatInstance(interview.id, module.id, "household.member");
+
+  const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [
+      { questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, valueText: "Juan" },
+      { questionCode: "household.member.age", repeatInstanceId: repeat.id, responseState: ResponseState.ANSWERED, valueNumber: 42 }
+    ]
+  });
+
+  await expectStatus(response, 200);
+  const body = await response.json();
+  ids.questionnaireResponses.push(...body.responses.map((item: { id: string }) => item.id));
+  assert.equal(body.moduleId, module.id);
+  assert.equal(body.responses.length, 2);
+}
+
+async function testQuestionnaireResponseRevisionIncrements() {
+  const { interview, module } = await createInterviewModule();
+  const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "project.awareness", responseState: ResponseState.ANSWERED, valueBoolean: true }]
+  });
+
+  await expectStatus(response, 200);
+  const body = await response.json();
+  ids.questionnaireResponses.push(...body.responses.map((item: { id: string }) => item.id));
+  assert.equal(body.revision, module.revision + 1);
+}
+
+async function testQuestionnaireResponseRevisionConflict() {
+  const { interview, module } = await createInterviewModule();
+  const first = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "project.awareness", responseState: ResponseState.ANSWERED, valueBoolean: true }]
+  });
+  await expectStatus(first, 200);
+  const body = await first.json();
+  ids.questionnaireResponses.push(...body.responses.map((item: { id: string }) => item.id));
+
+  const stale = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "project.awareness", responseState: ResponseState.ANSWERED, valueBoolean: false }]
+  });
+  await expectStatus(stale, 409);
+}
+
+async function testDuplicateQuestionnaireResponseUpdates() {
+  const { interview, module } = await createInterviewModule();
+  const first = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, valueText: "Juan" }]
+  });
+  await expectStatus(first, 200);
+  const firstBody = await first.json();
+  ids.questionnaireResponses.push(...firstBody.responses.map((item: { id: string }) => item.id));
+
+  const second = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: firstBody.revision,
+    responses: [{ questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, valueText: "Pedro" }]
+  });
+  await expectStatus(second, 200);
+
+  const fetched = await get(`/interviews/${interview.id}/modules/${module.id}/responses`);
+  await expectStatus(fetched, 200);
+  const responses = await fetched.json();
+  assert.equal(responses.filter((item: { questionCode: string }) => item.questionCode === "respondent.first_name").length, 1);
+  assert.equal(responses[0].valueText, "Pedro");
+}
+
+async function testResponseRepeatInstanceModuleMismatch() {
+  const first = await createInterviewModule();
+  const second = await createInterviewModule();
+  const repeat = await createRepeatInstance(second.interview.id, second.module.id, "household.member");
+
+  const response = await put(`/interviews/${first.interview.id}/modules/${first.module.id}/responses`, {
+    expectedRevision: first.module.revision,
+    responses: [{ questionCode: "household.member.age", repeatInstanceId: repeat.id, responseState: ResponseState.ANSWERED, valueNumber: 42 }]
+  });
+  await expectStatus(response, 400);
+}
+
+async function testRepeatInstanceCreation() {
+  const { interview, module } = await createInterviewModule();
+  const response = await post(`/interviews/${interview.id}/modules/${module.id}/repeat-instances`, { groupCode: "household.member", sequenceNumber: 1 });
+  await expectStatus(response, 201);
+  const repeat = await response.json();
+  ids.questionnaireRepeatInstances.push(repeat.id);
+  assert.equal(repeat.groupCode, "household.member");
+}
+
+async function testRepeatInstanceParentModuleMismatch() {
+  const first = await createInterviewModule();
+  const second = await createInterviewModule();
+  const parent = await createRepeatInstance(second.interview.id, second.module.id, "household.member");
+
+  const response = await post(`/interviews/${first.interview.id}/modules/${first.module.id}/repeat-instances`, {
+    groupCode: "household.member.skill",
+    parentRepeatInstanceId: parent.id
+  });
+  await expectStatus(response, 400);
+}
+
+async function testRepeatInstanceSelfParentRejected() {
+  const { interview, module } = await createInterviewModule();
+  const repeat = await createRepeatInstance(interview.id, module.id, "household.member");
+
+  const response = await patch(`/interviews/${interview.id}/modules/${module.id}/repeat-instances/${repeat.id}`, { parentRepeatInstanceId: repeat.id });
+  await expectStatus(response, 400);
+}
+
+async function testConflictingTypedValuesRejected() {
+  const { interview, module } = await createInterviewModule();
+  const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, valueNumber: 1, valueText: "Juan" }]
+  });
+  await expectStatus(response, 400);
+}
+
+async function testNoResponseWithoutValueAccepted() {
+  const { interview, module } = await createInterviewModule();
+  const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "respondent.middle_name", responseState: ResponseState.NO_RESPONSE }]
+  });
+  await expectStatus(response, 200);
+  const body = await response.json();
+  ids.questionnaireResponses.push(...body.responses.map((item: { id: string }) => item.id));
+  assert.equal(body.responses[0].responseState, ResponseState.NO_RESPONSE);
+}
+
+async function testValidationIssuesListed() {
+  const { interview, module } = await createInterviewModule();
+  const issue = await prisma.validationIssue.create({
+    data: {
+      code: "TECHNICAL_TEST",
+      interviewId: interview.id,
+      interviewModuleId: module.id,
+      message: "Technical test issue",
+      severity: ValidationSeverity.WARNING
+    }
+  });
+  ids.validationIssues.push(issue.id);
+
+  const response = await get(`/interviews/${interview.id}/modules/${module.id}/validation-issues`);
+  await expectStatus(response, 200);
+  const issues = await response.json();
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].code, "TECHNICAL_TEST");
+}
+
+async function testQuestionnaireUnknownFieldsRejected() {
+  const { interview, module } = await createInterviewModule();
+  const response = await put(`/interviews/${interview.id}/modules/${module.id}/responses`, {
+    expectedRevision: module.revision,
+    responses: [{ questionCode: "respondent.first_name", responseState: ResponseState.ANSWERED, unexpected: "rejected", valueText: "Juan" }]
   });
   await expectStatus(response, 400);
 }
@@ -379,7 +558,31 @@ async function createInterview() {
   return interview;
 }
 
+async function createInterviewModule() {
+  const interview = await createInterview();
+  const version = await prisma.questionnaireVersion.findFirstOrThrow({ where: { moduleType: QuestionnaireModuleType.HOUSEHOLD } });
+  const response = await post(`/interviews/${interview.id}/modules`, {
+    moduleType: QuestionnaireModuleType.HOUSEHOLD,
+    questionnaireVersionId: version.id
+  });
+  await expectStatus(response, 201);
+  const module = await response.json();
+  ids.interviewModules.push(module.id);
+  return { interview, module };
+}
+
+async function createRepeatInstance(interviewId: string, moduleId: string, groupCode: string) {
+  const response = await post(`/interviews/${interviewId}/modules/${moduleId}/repeat-instances`, { groupCode });
+  await expectStatus(response, 201);
+  const repeat = await response.json();
+  ids.questionnaireRepeatInstances.push(repeat.id);
+  return repeat;
+}
+
 async function cleanup() {
+  await prisma.validationIssue.deleteMany({ where: { id: { in: ids.validationIssues } } });
+  await prisma.questionnaireResponse.deleteMany({ where: { id: { in: ids.questionnaireResponses } } });
+  await prisma.questionnaireRepeatInstance.deleteMany({ where: { id: { in: ids.questionnaireRepeatInstances } } });
   await prisma.structureOccupancy.deleteMany({ where: { id: { in: ids.structureOccupancies } } });
   await prisma.structureAssociation.deleteMany({ where: { id: { in: ids.structureAssociations } } });
   await prisma.structureTag.deleteMany({ where: { id: { in: ids.structureTags } } });
@@ -411,6 +614,26 @@ function post(path: string, body: unknown) {
     headers: { "content-type": "application/json" },
     method: "POST"
   });
+}
+
+function put(path: string, body: unknown) {
+  return fetch(`${baseUrl}${path}`, {
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+    method: "PUT"
+  });
+}
+
+function patch(path: string, body: unknown) {
+  return fetch(`${baseUrl}${path}`, {
+    body: JSON.stringify(body),
+    headers: { "content-type": "application/json" },
+    method: "PATCH"
+  });
+}
+
+function get(path: string) {
+  return fetch(`${baseUrl}${path}`);
 }
 
 async function expectStatus(response: Response, expectedStatus: number) {

@@ -38,6 +38,28 @@ enum ModuleStatus {
   FINALIZED
 }
 
+enum ResponseState {
+  ANSWERED
+  NO_RESPONSE
+  NOT_APPLICABLE
+  UNKNOWN
+  MISSING
+  REQUIRES_VALIDATION
+}
+
+enum ValidationSeverity {
+  INFORMATION
+  WARNING
+  ERROR
+  BLOCKING_ERROR
+}
+
+enum ValidationIssueStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
 model Project {
   id          String   @id @default(uuid()) @db.Uuid
   code        String   @unique
@@ -86,7 +108,8 @@ model User {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  enumeratedInterviews Interview[] @relation("InterviewEnumerator")
+  enumeratedInterviews     Interview[]       @relation("InterviewEnumerator")
+  resolvedValidationIssues ValidationIssue[] @relation("ValidationIssueResolvedBy")
 
   @@map("users")
 }
@@ -129,6 +152,7 @@ model Interview {
   respondentPerson Person?           @relation("InterviewRespondent", fields: [respondentPersonId], references: [id], onDelete: Restrict)
   enumerator       User              @relation("InterviewEnumerator", fields: [enumeratorUserId], references: [id], onDelete: Restrict)
   modules          InterviewModule[]
+  validationIssues ValidationIssue[]
 
   @@index([projectId])
   @@index([surveyAreaId])
@@ -147,16 +171,20 @@ model InterviewModule {
   landParcelId           String?                 @db.Uuid
   structureId            String?                 @db.Uuid
   status                 ModuleStatus            @default(DRAFT)
+  revision               Int                     @default(1)
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
 
-  interview            Interview                   @relation(fields: [interviewId], references: [id], onDelete: Restrict)
-  questionnaireVersion QuestionnaireVersion        @relation(fields: [questionnaireVersionId], references: [id], onDelete: Restrict)
-  household            Household?                  @relation(fields: [householdId], references: [id], onDelete: Restrict)
-  business             Business?                   @relation(fields: [businessId], references: [id], onDelete: Restrict)
-  landParcel           LandParcel?                 @relation(fields: [landParcelId], references: [id], onDelete: Restrict)
-  structure            Structure?                  @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  interview            Interview                     @relation(fields: [interviewId], references: [id], onDelete: Restrict)
+  questionnaireVersion QuestionnaireVersion          @relation(fields: [questionnaireVersionId], references: [id], onDelete: Restrict)
+  household            Household?                    @relation(fields: [householdId], references: [id], onDelete: Restrict)
+  business             Business?                     @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  landParcel           LandParcel?                   @relation(fields: [landParcelId], references: [id], onDelete: Restrict)
+  structure            Structure?                    @relation(fields: [structureId], references: [id], onDelete: Restrict)
   identityObservations PersonIdentityObservation[]
+  repeatInstances      QuestionnaireRepeatInstance[]
+  responses            QuestionnaireResponse[]
+  validationIssues     ValidationIssue[]
 
   @@index([interviewId])
   @@index([questionnaireVersionId])
@@ -180,13 +208,14 @@ model Person {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  respondentInterviews Interview[]                 @relation("InterviewRespondent")
+  respondentInterviews Interview[]                   @relation("InterviewRespondent")
   identityObservations PersonIdentityObservation[]
   householdMemberships HouseholdMembership[]
   businessOwnerships   BusinessOwnership[]
   businessEmployees    BusinessEmployee[]
   landOwnerships       LandOwnership[]
   structureOccupancies StructureOccupancy[]
+  repeatInstances      QuestionnaireRepeatInstance[]
 
   @@index([lastName])
   @@map("persons")
@@ -246,9 +275,10 @@ model HouseholdMembership {
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
-  household               Household    @relation(fields: [householdId], references: [id], onDelete: Restrict)
-  person                  Person       @relation(fields: [personId], references: [id], onDelete: Restrict)
-  relationshipLookupValue LookupValue? @relation("HouseholdRelationshipLookup", fields: [relationshipLookupValueId], references: [id], onDelete: SetNull)
+  household               Household                     @relation(fields: [householdId], references: [id], onDelete: Restrict)
+  person                  Person                        @relation(fields: [personId], references: [id], onDelete: Restrict)
+  relationshipLookupValue LookupValue?                  @relation("HouseholdRelationshipLookup", fields: [relationshipLookupValueId], references: [id], onDelete: SetNull)
+  repeatInstances         QuestionnaireRepeatInstance[]
 
   @@index([householdId])
   @@index([personId])
@@ -320,8 +350,9 @@ model BusinessEmployee {
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
-  business Business @relation(fields: [businessId], references: [id], onDelete: Restrict)
-  person   Person   @relation(fields: [personId], references: [id], onDelete: Restrict)
+  business        Business                      @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  person          Person                        @relation(fields: [personId], references: [id], onDelete: Restrict)
+  repeatInstances QuestionnaireRepeatInstance[]
 
   @@index([businessId])
   @@index([personId])
@@ -382,14 +413,15 @@ model Structure {
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
-  project                     Project                @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  surveyArea                  SurveyArea             @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
-  landParcel                  LandParcel?            @relation(fields: [landParcelId], references: [id], onDelete: SetNull)
+  project                     Project                       @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  surveyArea                  SurveyArea                    @relation(fields: [surveyAreaId], references: [id], onDelete: Restrict)
+  landParcel                  LandParcel?                   @relation(fields: [landParcelId], references: [id], onDelete: SetNull)
   tags                        StructureTag[]
-  parentStructureAssociations StructureAssociation[] @relation("ParentStructureAssociation")
-  childStructureAssociations  StructureAssociation[] @relation("ChildStructureAssociation")
+  parentStructureAssociations StructureAssociation[]        @relation("ParentStructureAssociation")
+  childStructureAssociations  StructureAssociation[]        @relation("ChildStructureAssociation")
   occupancies                 StructureOccupancy[]
   interviewModules            InterviewModule[]
+  repeatInstances             QuestionnaireRepeatInstance[]
 
   @@index([projectId])
   @@index([surveyAreaId])
@@ -487,4 +519,88 @@ model LookupValue {
   @@unique([lookupSetId, code])
   @@index([lookupSetId])
   @@map("lookup_values")
+}
+
+model QuestionnaireRepeatInstance {
+  id                          String   @id @default(uuid()) @db.Uuid
+  interviewModuleId           String   @db.Uuid
+  groupCode                   String
+  parentRepeatInstanceId      String?  @db.Uuid
+  sequenceNumber              Int?
+  linkedPersonId              String?  @db.Uuid
+  linkedHouseholdMembershipId String?  @db.Uuid
+  linkedBusinessEmployeeId    String?  @db.Uuid
+  linkedStructureId           String?  @db.Uuid
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  interviewModule           InterviewModule               @relation(fields: [interviewModuleId], references: [id], onDelete: Restrict)
+  parentRepeatInstance      QuestionnaireRepeatInstance?  @relation("RepeatInstanceParent", fields: [parentRepeatInstanceId], references: [id], onDelete: Restrict)
+  childRepeatInstances      QuestionnaireRepeatInstance[] @relation("RepeatInstanceParent")
+  linkedPerson              Person?                       @relation(fields: [linkedPersonId], references: [id], onDelete: Restrict)
+  linkedHouseholdMembership HouseholdMembership?          @relation(fields: [linkedHouseholdMembershipId], references: [id], onDelete: Restrict)
+  linkedBusinessEmployee    BusinessEmployee?             @relation(fields: [linkedBusinessEmployeeId], references: [id], onDelete: Restrict)
+  linkedStructure           Structure?                    @relation(fields: [linkedStructureId], references: [id], onDelete: Restrict)
+  responses                 QuestionnaireResponse[]
+
+  @@index([interviewModuleId])
+  @@index([parentRepeatInstanceId])
+  @@index([linkedPersonId])
+  @@index([linkedHouseholdMembershipId])
+  @@index([linkedBusinessEmployeeId])
+  @@index([linkedStructureId])
+  @@map("questionnaire_repeat_instances")
+}
+
+model QuestionnaireResponse {
+  id                String        @id @default(uuid()) @db.Uuid
+  interviewModuleId String        @db.Uuid
+  questionCode      String
+  repeatInstanceId  String?       @db.Uuid
+  responseState     ResponseState
+  valueText         String?
+  valueNumber       Decimal?      @db.Decimal(18, 4)
+  valueBoolean      Boolean?
+  valueDate         DateTime?
+  valueJson         Json?
+  rawValue          String?
+  capturedAt        DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  interviewModule  InterviewModule              @relation(fields: [interviewModuleId], references: [id], onDelete: Restrict)
+  repeatInstance   QuestionnaireRepeatInstance? @relation(fields: [repeatInstanceId], references: [id], onDelete: Restrict)
+  validationIssues ValidationIssue[]
+
+  @@index([interviewModuleId])
+  @@index([repeatInstanceId])
+  @@index([questionCode])
+  @@map("questionnaire_responses")
+}
+
+model ValidationIssue {
+  id                      String                @id @default(uuid()) @db.Uuid
+  interviewId             String?               @db.Uuid
+  interviewModuleId       String?               @db.Uuid
+  questionnaireResponseId String?               @db.Uuid
+  severity                ValidationSeverity
+  code                    String
+  message                 String
+  status                  ValidationIssueStatus @default(OPEN)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  resolvedAt              DateTime?
+  resolvedByUserId        String?               @db.Uuid
+
+  interview             Interview?             @relation(fields: [interviewId], references: [id], onDelete: Restrict)
+  interviewModule       InterviewModule?       @relation(fields: [interviewModuleId], references: [id], onDelete: Restrict)
+  questionnaireResponse QuestionnaireResponse? @relation(fields: [questionnaireResponseId], references: [id], onDelete: Restrict)
+  resolvedByUser        User?                  @relation("ValidationIssueResolvedBy", fields: [resolvedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([interviewId])
+  @@index([interviewModuleId])
+  @@index([questionnaireResponseId])
+  @@index([resolvedByUserId])
+  @@index([status])
+  @@map("validation_issues")
 }

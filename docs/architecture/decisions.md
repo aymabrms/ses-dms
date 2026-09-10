@@ -89,3 +89,21 @@ The NestJS API uses a global validation pipe with whitelist, forbidden non-white
 **Status:** Accepted for Phase 4B
 
 The Household, Business, Land, and Structure APIs validate required references, project boundaries, ownership XOR rules, occupancy XOR rules, and safe duplicate relationship cases at the service layer. No new database migrations or unique constraints are introduced in Phase 4B.
+
+## ADR-016: Questionnaire responses use a hybrid storage model
+
+**Status:** Accepted for Phase 4D
+
+Stable SES/DMS domain entities remain normalized, while raw questionnaire responses are stored flexibly under `InterviewModule` using stable `questionCode` values, typed value columns, raw values, explicit response states, and optional repeat-instance context. Phase 4D does not introduce a full question/form-definition engine.
+
+## ADR-017: Response writes use module-level optimistic concurrency
+
+**Status:** Accepted for Phase 4D
+
+`InterviewModule.revision` is the first server-side concurrency token. Bulk response writes require `expectedRevision`, update responses transactionally, increment the module revision on success, and return HTTP `409 Conflict` for stale revisions without automatic merge.
+
+## ADR-018: Nullable repeat response uniqueness uses PostgreSQL partial indexes
+
+**Status:** Accepted for Phase 4D
+
+Questionnaire responses are logically unique by module, question code, and repeat instance. Because root-level responses have `NULL` repeat instance IDs and PostgreSQL normal unique constraints allow multiple nulls, Phase 4D uses partial unique indexes for root-level and repeated responses.
