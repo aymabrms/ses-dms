@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.next/
+.expo/
+.expo-shared/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+android/
+ios/

@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "SES/DMS",
+    "slug": "ses-dms",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.sesdms.mobile"
+    },
+    "ios": {
+      "bundleIdentifier": "com.sesdms.mobile"
+    }
+  }
+}
