@@ -123,3 +123,11 @@ This document records unresolved business and design decisions discovered during
 1. Offline sync is required by project vision but not defined by paper sources. The ambiguity is how questionnaire version, response states, validation issues, and correction cycles travel between device and server. A future decision is required on sync payload boundaries.
 2. If a submitted survey is returned for correction while the device is offline, the ambiguity is how conflicts are prevented. A future decision is required on assignment locking and revision handling.
 3. Client-generated IDs are likely needed for offline records, but identity matching across persons, structures, land, and businesses is unresolved. A future decision is required on offline identifier strategy after domain review.
+
+## Phase 6 questionnaire engine follow-ups
+
+1. Module triggers are currently recommendations requiring explicit user action. The ambiguity is whether Household business-use structures should make Business required or merely recommended. A future decision is required on trigger severity policy.
+2. Respondent prefill from normalized Person records is deferred. The ambiguity is how to show `PRE-FILLED` values separately from confirmed questionnaire responses. A future decision is required on prefill confirmation UX.
+3. Business and Landowner triggers do not automatically create modules. The ambiguity is whether survey workflow should require one combined interview or separate interviews for some roles. A future decision is required on multi-role interview boundaries.
+4. Signature blocks are captured as metadata only. The ambiguity is whether drawn signatures, typed acknowledgements, or uploaded images are legally required. A future decision is required on certification evidence.
+5. Definition integrity is bundled in mobile tests. The ambiguity is whether future definition changes should be managed by a server-side authoring/review process. A future decision is required on questionnaire governance.

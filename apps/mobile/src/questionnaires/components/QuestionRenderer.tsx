@@ -46,7 +46,7 @@ export function QuestionRenderer({ messages = [], onSave, question, response }: 
       <Text style={styles.label}>{question.label}{question.required ? " *" : ""}</Text>
       {question.helpText ? <Text style={styles.help}>{question.helpText}</Text> : null}
       {question.triggerRecommendation ? <Text style={styles.recommendation}>{question.triggerRecommendation.level}: {question.triggerRecommendation.message}</Text> : null}
-      <FieldControl type={question.type} value={draft} options={question.options} onChange={saveImmediate} onBlur={() => onSave(question, normalizeValue(question.type, draft), responseState)} />
+      <FieldControl type={question.type} label={question.label} value={draft} options={question.options} onChange={saveImmediate} onBlur={() => onSave(question, normalizeValue(question.type, draft), responseState)} />
       <ResponseStateControl value={responseState} onChange={updateState} />
       {messages.map((message) => <Text key={`${message.code}-${message.message}`} style={message.severity === "WARNING" ? styles.warning : styles.error}>{message.message}</Text>)}
     </View>

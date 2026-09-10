@@ -6,17 +6,19 @@ interface FieldControlProps {
   type: FieldType;
   value: unknown;
   options?: QuestionOption[];
+  label?: string;
   onChange: (value: unknown) => void;
   onBlur?: () => void;
 }
 
-export function FieldControl({ onBlur, onChange, options = [], type, value }: FieldControlProps) {
+export function FieldControl({ label = "", onBlur, onChange, options = [], type, value }: FieldControlProps) {
   if (type === "STATIC_TEXT") return <Text style={styles.staticText}>{String(value ?? "")}</Text>;
   if (type === "BOOLEAN") return <Segmented options={[{ label: "Yes", value: true }, { label: "No", value: false }]} value={value} onChange={onChange} />;
   if (type === "SINGLE_SELECT") return <Segmented options={options} value={value} onChange={onChange} />;
   if (type === "MULTI_SELECT") return <MultiSelect options={options} value={Array.isArray(value) ? value.map(String) : []} onChange={onChange} />;
 
-  const keyboardType = type === "INTEGER" || type === "DECIMAL" || type === "MONEY" ? "numeric" : "default";
+  const labelLower = label.toLowerCase();
+  const keyboardType = labelLower.includes("email") ? "email-address" : labelLower.includes("contact") || labelLower.includes("phone") ? "phone-pad" : type === "INTEGER" || type === "DECIMAL" || type === "MONEY" ? "numeric" : "default";
   const placeholder = type === "DATE" ? "YYYY-MM-DD" : type === "TIME" ? "HH:mm" : undefined;
   return <TextInput multiline={type === "TEXTAREA"} onBlur={onBlur} onChangeText={onChange} placeholder={placeholder} style={[styles.input, type === "TEXTAREA" && styles.textarea]} keyboardType={keyboardType} value={value === null || value === undefined ? "" : String(value)} />;
 }

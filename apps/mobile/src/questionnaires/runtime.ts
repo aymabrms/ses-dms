@@ -1,5 +1,5 @@
 import { ResponseState } from "../types/offline";
-import { CompletionState, QuestionDefinition, QuestionRule, QuestionnaireDefinition, RepeatGroupDefinition, SectionDefinition } from "./types";
+import { CompletionState, ModuleTriggerOutcome, QuestionDefinition, QuestionRule, QuestionnaireDefinition, RepeatGroupDefinition, SectionDefinition } from "./types";
 
 export type ResponseValue = string | number | boolean | string[] | null;
 
@@ -22,6 +22,14 @@ export interface RepeatInstanceRuntime {
   groupCode: string;
   sequenceNumber?: number | null;
   localSyncStatus?: string | null;
+}
+
+export interface ModuleTriggerResult {
+  message: string;
+  outcome: ModuleTriggerOutcome;
+  questionCode: string;
+  repeatInstanceId?: string | null;
+  targetModuleType: string;
 }
 
 export function responseKey(questionCode: string, repeatInstanceId?: string | null) {
@@ -108,6 +116,8 @@ export function calculateCompletion(definition: QuestionnaireDefinition, respons
       for (const question of repeatGroup.questions) messages.push(...validateQuestion(question, responseMap, instance.id));
     }
   }
+  messages.push(...validateBirthdateAgePairs(responseMap, responses));
+  messages.push(...validateBusinessEmployeeTotals(definition, responseMap, repeatInstances));
 
   const answeredCount = responses.filter((response) => response.responseState === "ANSWERED" && !isEmptyValue(response.value)).length;
   const requiredMissingCount = messages.filter((message) => message.severity === "ERROR").length;
@@ -121,6 +131,20 @@ export function calculateCompletion(definition: QuestionnaireDefinition, respons
   else completionState = "COMPLETE";
 
   return { answeredCount, completionState, messages, requiredMissingCount, warningCount };
+}
+
+export function evaluateModuleTriggers(definition: QuestionnaireDefinition, responses: RuntimeResponse[], existingModuleTypes: string[] = []): ModuleTriggerResult[] {
+  const results: ModuleTriggerResult[] = [];
+  const existing = new Set(existingModuleTypes);
+  for (const question of getAllQuestions(definition)) {
+    for (const trigger of question.moduleTriggers ?? []) {
+      const matchingResponses = responses.filter((response) => response.questionCode === question.code && response.responseState === "ANSWERED" && (trigger.value === undefined || response.value === trigger.value));
+      for (const response of matchingResponses) {
+        results.push({ message: existing.has(trigger.moduleType) ? `${trigger.message} Existing ${trigger.moduleType} module is available.` : trigger.message, outcome: trigger.outcome, questionCode: question.code, repeatInstanceId: response.repeatInstanceId, targetModuleType: trigger.moduleType });
+      }
+    }
+  }
+  return results;
 }
 
 export function getAllQuestions(definition: QuestionnaireDefinition) {
@@ -171,4 +195,39 @@ export function getRepeatGroup(definition: QuestionnaireDefinition, groupCode: s
 
 function isEmptyValue(value: ResponseValue) {
   return value === null || value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+function validateBirthdateAgePairs(responses: Map<string, RuntimeResponse>, allResponses: RuntimeResponse[]): ValidationMessage[] {
+  const messages: ValidationMessage[] = [];
+  for (const response of allResponses) {
+    if (!response.questionCode.endsWith(".birth_date") || typeof response.value !== "string") continue;
+    const prefix = response.questionCode.slice(0, -".birth_date".length);
+    const age = responses.get(responseKey(`${prefix}.age`, response.repeatInstanceId))?.value;
+    if (typeof age !== "number") continue;
+    const birthYear = Number(response.value.slice(0, 4));
+    if (!Number.isFinite(birthYear)) continue;
+    const approximateAge = new Date().getFullYear() - birthYear;
+    if (Math.abs(approximateAge - age) > 1) messages.push({ code: response.questionCode, message: "Birthdate and age appear inconsistent; verify the source response.", repeatInstanceId: response.repeatInstanceId, severity: "WARNING" });
+  }
+  return messages;
+}
+
+function validateBusinessEmployeeTotals(definition: QuestionnaireDefinition, responses: Map<string, RuntimeResponse>, repeatInstances: RepeatInstanceRuntime[]): ValidationMessage[] {
+  if (definition.moduleType !== "BUSINESS") return [];
+  const employeeInstances = repeatInstances.filter((instance) => instance.groupCode === "business.employees");
+  const maleTotal = responses.get(responseKey("business.employees.total_male"))?.value;
+  const femaleTotal = responses.get(responseKey("business.employees.total_female"))?.value;
+  const counted = employeeInstances.reduce(
+    (acc, instance) => {
+      const gender = responses.get(responseKey("business.employees.gender", instance.id))?.value;
+      if (gender === "MALE") acc.male += 1;
+      if (gender === "FEMALE") acc.female += 1;
+      return acc;
+    },
+    { female: 0, male: 0 }
+  );
+  const messages: ValidationMessage[] = [];
+  if (typeof maleTotal === "number" && maleTotal !== counted.male) messages.push({ code: "business.employees.total_male", message: "Captured male employee total does not match employee rows; verify without overwriting source answers.", severity: "WARNING" });
+  if (typeof femaleTotal === "number" && femaleTotal !== counted.female) messages.push({ code: "business.employees.total_female", message: "Captured female employee total does not match employee rows; verify without overwriting source answers.", severity: "WARNING" });
+  return messages;
 }

@@ -9,7 +9,7 @@ export default function App() {
 
   return (
     <>
-      {questionnaireModuleId ? <QuestionnaireScreen moduleId={questionnaireModuleId} onBack={() => setQuestionnaireModuleId(null)} /> : <OfflineDebugScreen onOpenQuestionnaireModule={setQuestionnaireModuleId} />}
+      {questionnaireModuleId ? <QuestionnaireScreen moduleId={questionnaireModuleId} onBack={() => setQuestionnaireModuleId(null)} onOpenModule={setQuestionnaireModuleId} /> : <OfflineDebugScreen onOpenQuestionnaireModule={setQuestionnaireModuleId} />}
       <StatusBar style="dark" />
     </>
   );

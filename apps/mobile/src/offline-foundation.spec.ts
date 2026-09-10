@@ -1,7 +1,7 @@
 import type { LocalDatabase } from "./db/types";
 import { buildResponseInput } from "./questionnaires/responseMapping";
 import { getQuestionnaireDefinition } from "./questionnaires/registry";
-import { assertDefinitionIntegrity, assertUniqueQuestionCodes, calculateCompletion, getRepeatGroup, indexResponses, isQuestionRequired, isQuestionVisible, isRepeatDeletionAllowed, responseKey } from "./questionnaires/runtime";
+import { assertDefinitionIntegrity, assertUniqueQuestionCodes, calculateCompletion, evaluateModuleTriggers, getRepeatGroup, indexResponses, isQuestionRequired, isQuestionVisible, isRepeatDeletionAllowed, responseKey } from "./questionnaires/runtime";
 import { buildModuleSyncPayload, mapRepeatForSync, mapResponseForSync } from "./sync/payloadBuilder";
 import { buildModuleSyncOutboxPayload } from "./sync/outboxPayload";
 import { processAcceptedModuleResult } from "./sync/syncStateRepository";
@@ -79,7 +79,137 @@ async function main() {
   await assertAcceptedCreateReconciliation();
   assertQuestionnaireRuntime();
   await assertBusinessQuestionnaireRuntime();
+  assertLandownerQuestionnaireRuntime();
+  assertMultiRoleInterviewRuntime();
+  assertCrossModuleTriggersAndWarnings();
   console.log("ok - mobile offline foundation pure checks");
+}
+
+function assertCrossModuleTriggersAndWarnings() {
+  const household = getQuestionnaireDefinition("HOUSEHOLD", "INITIAL");
+  const householdTriggers = evaluateModuleTriggers(household, [{ questionCode: "household.associated_structures.used_for_business", repeatInstanceId: "structure-1", responseState: "ANSWERED", value: "YES" }], ["HOUSEHOLD"]);
+  assertJsonEqual(householdTriggers.map((trigger) => `${trigger.targetModuleType}:${trigger.outcome}`), ["BUSINESS:RECOMMENDED"]);
+  assertJsonEqual(householdTriggers[0]?.repeatInstanceId, "structure-1");
+  assertJsonEqual(evaluateModuleTriggers(household, [{ questionCode: "household.associated_structures.used_for_business", repeatInstanceId: "structure-1", responseState: "ANSWERED", value: "NO" }]).length, 0);
+
+  const landowner = getQuestionnaireDefinition("LANDOWNER", "INITIAL");
+  const landownerTriggers = evaluateModuleTriggers(landowner, [{ questionCode: "landowner.business.exists_on_land", responseState: "ANSWERED", value: "YES" }], ["LANDOWNER", "BUSINESS"]);
+  assertJsonEqual(landownerTriggers.length, 1);
+  assertJsonEqual(landownerTriggers[0]?.message.includes("Existing BUSINESS module"), true);
+
+  const business = getQuestionnaireDefinition("BUSINESS", "INITIAL");
+  const warnings = calculateCompletion(
+    business,
+    [
+      { questionCode: "business.employees.total_male", responseState: "ANSWERED" as const, value: 2 },
+      { questionCode: "business.employees.total_female", responseState: "ANSWERED" as const, value: 0 },
+      { questionCode: "business.employees.gender", repeatInstanceId: "employee-1", responseState: "ANSWERED" as const, value: "MALE" },
+      { questionCode: "business.owner.birth_date", responseState: "ANSWERED" as const, value: "2000-01-01" },
+      { questionCode: "business.owner.age", responseState: "ANSWERED" as const, value: 60 }
+    ],
+    [{ groupCode: "business.employees", id: "employee-1", localSyncStatus: "LOCAL_ONLY" }]
+  ).messages.filter((message) => message.severity === "WARNING");
+  assertJsonEqual(warnings.some((message) => message.code === "business.employees.total_male"), true);
+  assertJsonEqual(warnings.some((message) => message.code === "business.owner.birth_date"), true);
+}
+
+function assertLandownerQuestionnaireRuntime() {
+  const definition = getQuestionnaireDefinition("LANDOWNER", "INITIAL");
+  assertJsonEqual(definition.id, "landowner-20220525-v1");
+  assertThrows(() => getQuestionnaireDefinition("LANDOWNER", "UNKNOWN"));
+  assertDefinitionIntegrity(definition);
+  assertUniqueQuestionCodes(definition);
+  assertJsonEqual(definition.sections.map((section) => section.code), [
+    "landowner.interview",
+    "landowner.respondent",
+    "landowner.owner",
+    "landowner.spouse",
+    "landowner.land",
+    "landowner.structure",
+    "landowner.business",
+    "landowner.rental_tenancy",
+    "landowner.trees_crops",
+    "landowner.project_awareness",
+    "landowner.feedback.issues_section",
+    "landowner.feedback.recommendations_section",
+    "landowner.feedback.benefits_section",
+    "landowner.feedback.livelihood_preferences_section",
+    "landowner.certification"
+  ]);
+  assertJsonEqual(definition.repeatGroups.map((group) => group.code), ["landowner.feedback.issues", "landowner.feedback.recommendations", "landowner.feedback.benefits", "landowner.feedback.livelihood_preferences"]);
+
+  const structureUse = required(definition.sections.find((section) => section.code === "landowner.structure")?.questions.find((question) => question.code === "landowner.structure.use"));
+  assertJsonEqual(isQuestionVisible(structureUse, indexResponses([{ questionCode: "landowner.structure.exists", responseState: "ANSWERED", value: "NO" }])), false);
+  assertJsonEqual(isQuestionVisible(structureUse, indexResponses([{ questionCode: "landowner.structure.exists", responseState: "ANSWERED", value: "YES" }])), true);
+
+  const businessKind = required(definition.sections.find((section) => section.code === "landowner.business")?.questions.find((question) => question.code === "landowner.business.kind"));
+  assertJsonEqual(isQuestionVisible(businessKind, indexResponses([{ questionCode: "landowner.business.exists_on_land", responseState: "ANSWERED", value: "NO" }])), false);
+  assertJsonEqual(isQuestionVisible(businessKind, indexResponses([{ questionCode: "landowner.business.exists_on_land", responseState: "ANSWERED", value: "YES" }])), true);
+
+  const landRent = required(definition.sections.find((section) => section.code === "landowner.rental_tenancy")?.questions.find((question) => question.code === "landowner.rent.land_monthly_rental"));
+  assertJsonEqual(isQuestionVisible(landRent, indexResponses([{ questionCode: "landowner.rent.land_rented_out", responseState: "ANSWERED", value: "NO" }])), false);
+  assertJsonEqual(isQuestionVisible(landRent, indexResponses([{ questionCode: "landowner.rent.land_rented_out", responseState: "ANSWERED", value: "YES" }])), true);
+
+  const planter = required(definition.sections.find((section) => section.code === "landowner.trees_crops")?.questions.find((question) => question.code === "landowner.trees_crops.planter"));
+  assertJsonEqual(isQuestionVisible(planter, indexResponses([{ questionCode: "landowner.trees_crops.exists", responseState: "ANSWERED", value: "NO" }])), false);
+  assertJsonEqual(isQuestionVisible(planter, indexResponses([{ questionCode: "landowner.trees_crops.exists", responseState: "ANSWERED", value: "YES" }])), true);
+
+  const awarenessSource = required(definition.sections.find((section) => section.code === "landowner.project_awareness")?.questions.find((question) => question.code === "landowner.project_awareness.source"));
+  assertJsonEqual(isQuestionVisible(awarenessSource, indexResponses([{ questionCode: "landowner.project_awareness.aware", responseState: "ANSWERED", value: "NO" }])), false);
+  assertJsonEqual(calculateCompletion(definition, [{ questionCode: "landowner.project_awareness.aware", responseState: "ANSWERED", value: "NO" }]).messages.some((message) => message.code === "landowner.project_awareness.source"), false);
+
+  const completeResponses = [
+    { questionCode: "landowner.interview.enumerator_name", responseState: "ANSWERED" as const, value: "Enum" },
+    { questionCode: "landowner.interview.survey_date", responseState: "ANSWERED" as const, value: "2026-01-01" },
+    { questionCode: "landowner.respondent.last_name", responseState: "ANSWERED" as const, value: "Reyes" },
+    { questionCode: "landowner.respondent.first_name", responseState: "ANSWERED" as const, value: "Ana" },
+    { questionCode: "landowner.respondent.relationship_to_landowner", responseState: "ANSWERED" as const, value: "HOUSEHOLD_HEAD" },
+    { questionCode: "landowner.owner.last_name", responseState: "ANSWERED" as const, value: "Reyes" },
+    { questionCode: "landowner.owner.first_name", responseState: "ANSWERED" as const, value: "Ana" },
+    { questionCode: "landowner.land.occupies_owned_land", responseState: "ANSWERED" as const, value: "YES" },
+    { questionCode: "landowner.structure.exists", responseState: "ANSWERED" as const, value: "NO" },
+    { questionCode: "landowner.business.exists_on_land", responseState: "ANSWERED" as const, value: "NO" },
+    { questionCode: "landowner.trees_crops.exists", responseState: "ANSWERED" as const, value: "NO" },
+    { questionCode: "landowner.project_awareness.aware", responseState: "ANSWERED" as const, value: "NO" }
+  ];
+  assertJsonEqual(calculateCompletion(definition, []).completionState, "NOT_STARTED");
+  assertJsonEqual(calculateCompletion(definition, completeResponses).completionState, "COMPLETE");
+  assertJsonEqual(buildResponseInput("module-1", "landowner.land.area", "DECIMAL", "150.5", "ANSWERED"), { interviewModuleId: "module-1", questionCode: "landowner.land.area", repeatInstanceId: null, responseState: "ANSWERED", valueNumber: 150.5 });
+  assertJsonEqual(buildModuleSyncOutboxPayload("module-1"), { moduleId: "module-1" });
+}
+
+function assertMultiRoleInterviewRuntime() {
+  const definitions = [getQuestionnaireDefinition("HOUSEHOLD", "INITIAL"), getQuestionnaireDefinition("BUSINESS", "INITIAL"), getQuestionnaireDefinition("LANDOWNER", "INITIAL")];
+  assertJsonEqual(definitions.map((definition) => definition.moduleType), ["HOUSEHOLD", "BUSINESS", "LANDOWNER"]);
+  definitions.forEach(assertDefinitionIntegrity);
+
+  const interviewModules = [
+    { completion: "IN_PROGRESS", id: "module-household", interviewId: "interview-1", localSyncStatus: "DIRTY", moduleType: "HOUSEHOLD", respondentPersonId: "person-1" },
+    { completion: "COMPLETE", id: "module-business", interviewId: "interview-1", localSyncStatus: "LOCAL_ONLY", moduleType: "BUSINESS", respondentPersonId: "person-1" },
+    { completion: "NOT_STARTED", id: "module-landowner", interviewId: "interview-1", localSyncStatus: "SYNC_FAILED", moduleType: "LANDOWNER", respondentPersonId: "person-1" }
+  ];
+  assertJsonEqual(interviewModules.every((module) => module.interviewId === "interview-1"), true);
+  assertJsonEqual(new Set(interviewModules.map((module) => module.respondentPersonId)).size, 1);
+  assertJsonEqual(new Set(interviewModules.map((module) => module.id)).size, 3);
+  assertJsonEqual(interviewModules.map((module) => `${module.moduleType}:${module.completion}:${module.localSyncStatus}`), ["HOUSEHOLD:IN_PROGRESS:DIRTY", "BUSINESS:COMPLETE:LOCAL_ONLY", "LANDOWNER:NOT_STARTED:SYNC_FAILED"]);
+
+  const scopedResponses = indexResponses([
+    { questionCode: "household.respondent.first_name", responseState: "ANSWERED" as const, value: "Household Ana" },
+    { questionCode: "business.respondent.first_name", responseState: "ANSWERED" as const, value: "Business Ana" },
+    { questionCode: "landowner.respondent.first_name", responseState: "ANSWERED" as const, value: "Landowner Ana" }
+  ]);
+  assertJsonEqual(scopedResponses.get(responseKey("household.respondent.first_name"))?.value, "Household Ana");
+  assertJsonEqual(scopedResponses.get(responseKey("business.respondent.first_name"))?.value, "Business Ana");
+  assertJsonEqual(scopedResponses.get(responseKey("landowner.respondent.first_name"))?.value, "Landowner Ana");
+
+  const repeatResponses = indexResponses([
+    { questionCode: "household.members.first_name", repeatInstanceId: "household-repeat-1", responseState: "ANSWERED" as const, value: "Member" },
+    { questionCode: "business.employees.name", repeatInstanceId: "business-repeat-1", responseState: "ANSWERED" as const, value: "Employee" },
+    { questionCode: "landowner.feedback.issues.text", repeatInstanceId: "landowner-repeat-1", responseState: "ANSWERED" as const, value: "Concern" }
+  ]);
+  assertJsonEqual(repeatResponses.get(responseKey("household.members.first_name", "household-repeat-1"))?.value, "Member");
+  assertJsonEqual(repeatResponses.get(responseKey("business.employees.name", "business-repeat-1"))?.value, "Employee");
+  assertJsonEqual(repeatResponses.get(responseKey("landowner.feedback.issues.text", "landowner-repeat-1"))?.value, "Concern");
 }
 
 function assertQuestionnaireRuntime() {

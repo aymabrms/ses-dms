@@ -5,6 +5,7 @@ export type RuleOperator = "EQUALS" | "NOT_EQUALS" | "IN" | "NOT_EMPTY" | "EMPTY
 export type RuleEffect = "SHOW_IF" | "HIDE_IF" | "REQUIRE_IF";
 export type OptionSourceType = "INLINE_OPTIONS" | "LOOKUP_SET";
 export type CompletionState = "NOT_STARTED" | "IN_PROGRESS" | "COMPLETE_WITH_WARNINGS" | "COMPLETE" | "BLOCKED";
+export type ModuleTriggerOutcome = "REQUIRED" | "RECOMMENDED" | "OPTIONAL" | "NOT_APPLICABLE";
 
 export interface QuestionOption {
   value: string;
@@ -57,6 +58,7 @@ export interface QuestionDefinition {
   domainMapping?: DomainMapping;
   reportingMapping?: ReportingMapping;
   triggerRecommendation?: { moduleType: QuestionnaireModuleType; message: string; level: "RECOMMENDED" | "OPTIONAL" };
+  moduleTriggers?: Array<{ moduleType: QuestionnaireModuleType; outcome: ModuleTriggerOutcome; message: string; value?: string | number | boolean }>;
   sourceSection?: string;
   sourceText?: string;
 }

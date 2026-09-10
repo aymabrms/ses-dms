@@ -57,7 +57,7 @@ export const household20220525V1: QuestionnaireDefinition = {
   moduleType: "HOUSEHOLD",
   repeatGroups: [
     { code: "household.members", linkedDomainEntity: "Future Person + HouseholdMembership linkage; Phase 6C still stores repeat responses immediately.", minOccurrences: 0, orderMatters: true, questions: householdMemberQuestions, title: "Household Members" },
-    { code: "household.associated_structures", linkedDomainEntity: "Future Structure + StructureAssociation linkage.", minOccurrences: 0, orderMatters: true, questions: [q("household.associated_structures.tag", "Structure tag number", "TEXT", "Part VI - Associated Structures", true), select("household.associated_structures.type", "Type of associated structure", associatedStructureType, "Part VI - Associated Structures"), select("household.associated_structures.material", "Material of associated structure", associatedMaterial, "Part VI - Associated Structures"), select("household.associated_structures.used_for_business", "Used for business purposes?", yesNo, "Part VI - Associated Structures", false, { target: "RESPONSE_ONLY" }, undefined, { level: "RECOMMENDED", message: "Business questionnaire may be required.", moduleType: "BUSINESS" })].map(withRepeat("household.associated_structures")), title: "Associated Structures" },
+    { code: "household.associated_structures", linkedDomainEntity: "Future Structure + StructureAssociation linkage.", minOccurrences: 0, orderMatters: true, questions: [q("household.associated_structures.tag", "Structure tag number", "TEXT", "Part VI - Associated Structures", true), select("household.associated_structures.type", "Type of associated structure", associatedStructureType, "Part VI - Associated Structures"), select("household.associated_structures.material", "Material of associated structure", associatedMaterial, "Part VI - Associated Structures"), withModuleTrigger(select("household.associated_structures.used_for_business", "Used for business purposes?", yesNo, "Part VI - Associated Structures", false, { target: "RESPONSE_ONLY" }, undefined, { level: "RECOMMENDED", message: "Business questionnaire may be required.", moduleType: "BUSINESS" }), "BUSINESS", "RECOMMENDED", "Business questionnaire may be required based on associated-structure business use.", "YES")].map(withRepeat("household.associated_structures")), title: "Associated Structures" },
     { code: "household.land.trees_crops", linkedDomainEntity: "Future TreeCropRecord; itemization remains flexible.", minOccurrences: 0, orderMatters: true, questions: [q("household.land.trees_crops.description", "Tree/crop description", "TEXT", "Part VII - Trees and Crops", true), select("household.land.trees_crops.planter", "Who planted it?", treePlanter, "Part VII - Trees and Crops"), q("household.land.trees_crops.payment_arrangement", "Payment/proceeds arrangement", "TEXTAREA", "Part VII - Trees and Crops"), q("household.land.trees_crops.remarks", "Remarks", "TEXTAREA", "Part VII - Trees and Crops")].map(withRepeat("household.land.trees_crops")), title: "Trees / Crops" },
     feedbackGroup("household.feedback.issues", "Issues / Concerns"),
     feedbackGroup("household.feedback.recommendations", "Recommendations"),
@@ -159,6 +159,10 @@ function addBuilders(question: QuestionDefinition): BuilderQuestion {
       return { ...question, rules: [{ effect: "SHOW_IF" as const, operator: "EQUALS" as const, questionCode, value }, ...(required ? [{ effect: "REQUIRE_IF" as const, operator: "EQUALS" as const, questionCode, value }] : [])] };
     }
   });
+}
+
+function withModuleTrigger(question: QuestionDefinition, moduleType: "BUSINESS" | "HOUSEHOLD" | "LANDOWNER", outcome: "REQUIRED" | "RECOMMENDED" | "OPTIONAL" | "NOT_APPLICABLE", message: string, value: string): QuestionDefinition {
+  return { ...question, moduleTriggers: [{ message, moduleType, outcome, value }] };
 }
 
 function toOption(label: string): QuestionOption {

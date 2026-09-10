@@ -25,7 +25,7 @@ type ProjectRow = { id: string };
 type AreaRow = { id: string };
 type VersionRow = { id: string; module_type: "HOUSEHOLD" | "BUSINESS" | "LANDOWNER" };
 type InterviewRow = { id: string; project_id: string; survey_area_id: string; local_sync_status: string };
-type ModuleRow = { id: string; interview_id: string; local_sync_status: string };
+type ModuleRow = { id: string; interview_id: string; local_sync_status: string; module_type?: QuestionnaireModuleType; server_workflow_status?: string | null };
 type RepeatRow = { id: string };
 
 export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuestionnaireModule?: (moduleId: string) => void }) {
@@ -33,6 +33,7 @@ export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuesti
   const [schemaVersion, setSchemaVersion] = useState(0);
   const [counts, setCounts] = useState<Counts>({ conflictOutbox: 0, failedOutbox: 0, interviews: 0, outbox: 0, projects: 0, questionnaireVersions: 0, surveyAreas: 0, syncedModules: 0 });
   const [interviews, setInterviews] = useState<InterviewRow[]>([]);
+  const [modulesByInterview, setModulesByInterview] = useState<Record<string, ModuleRow[]>>({});
   const [lastModuleId, setLastModuleId] = useState<string | undefined>();
   const [message, setMessage] = useState("Initializing database...");
 
@@ -43,12 +44,13 @@ export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuesti
   async function refresh() {
     try {
       const db = await initializeDatabase();
-      const [version, projects, surveyAreas, questionnaireVersions, interviewRows, outbox, failedOutbox, conflictOutbox, syncedModules] = await Promise.all([
+      const [version, projects, surveyAreas, questionnaireVersions, interviewRows, moduleRows, outbox, failedOutbox, conflictOutbox, syncedModules] = await Promise.all([
         getSchemaVersion(),
         countTable(db, "local_projects"),
         countTable(db, "local_survey_areas"),
         countTable(db, "local_questionnaire_versions"),
         listLocalInterviews(db) as Promise<InterviewRow[]>,
+        db.getAllAsync<ModuleRow>("SELECT id, interview_id, module_type, local_sync_status FROM local_interview_modules ORDER BY created_at ASC"),
         countPendingOutboxItems(db),
         countOutboxItemsByStatus(db, "SYNC_FAILED"),
         countOutboxItemsByStatus(db, "CONFLICT"),
@@ -66,6 +68,7 @@ export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuesti
         syncedModules: syncedModules?.count ?? 0
       });
       setInterviews(interviewRows);
+      setModulesByInterview(groupModulesByInterview(moduleRows));
       setInitialized(true);
       setMessage("Database ready");
     } catch (error) {
@@ -105,6 +108,30 @@ export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuesti
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Create test interview failed");
+    }
+  }
+
+  async function addModuleToLatestInterview(moduleType: QuestionnaireModuleType) {
+    try {
+      const db = await getDatabase();
+      const interview = (await db.getFirstAsync("SELECT id FROM local_interviews ORDER BY updated_at DESC LIMIT 1")) as InterviewRow | null;
+      if (!interview) throw new Error("Create a local interview first");
+      const existing = await db.getFirstAsync<ModuleRow>("SELECT id, interview_id, local_sync_status FROM local_interview_modules WHERE interview_id = ? AND module_type = ? ORDER BY created_at ASC LIMIT 1", interview.id, moduleType);
+      if (existing) {
+        setLastModuleId(existing.id);
+        setMessage(`${moduleType} module already exists for latest interview`);
+        await refresh();
+        return;
+      }
+      const versions = (await listActiveQuestionnaireVersions(db)) as VersionRow[];
+      const questionnaireVersion = versions.find((version) => version.module_type === moduleType);
+      if (!questionnaireVersion) throw new Error(`Run bootstrap first: no ${moduleType} questionnaire version exists`);
+      const module = (await createLocalInterviewModule(db, { interviewId: interview.id, moduleType, questionnaireVersionId: questionnaireVersion.id })) as ModuleRow;
+      setLastModuleId(module.id);
+      setMessage(`Added ${moduleType} module ${module.id.slice(0, 8)} to latest interview`);
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : `Add ${moduleType} module failed`);
     }
   }
 
@@ -198,8 +225,13 @@ export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuesti
           <Button title="Bootstrap Reference Data" onPress={() => void bootstrap()} />
           <Button title="Create Local Household Interview" onPress={() => void createTestInterview("HOUSEHOLD")} />
           <Button title="Create Local Business Interview" onPress={() => void createTestInterview("BUSINESS")} />
+          <Button title="Create Local Landowner Interview" onPress={() => void createTestInterview("LANDOWNER")} />
+          <Button title="Add Household Module to Latest Interview" onPress={() => void addModuleToLatestInterview("HOUSEHOLD")} />
+          <Button title="Add Business Module to Latest Interview" onPress={() => void addModuleToLatestInterview("BUSINESS")} />
+          <Button title="Add Landowner Module to Latest Interview" onPress={() => void addModuleToLatestInterview("LANDOWNER")} />
           <Button title="Open Latest Household Questionnaire" onPress={() => void openLatestModule("HOUSEHOLD")} />
           <Button title="Open Latest Business Questionnaire" onPress={() => void openLatestModule("BUSINESS")} />
+          <Button title="Open Latest Landowner Questionnaire" onPress={() => void openLatestModule("LANDOWNER")} />
           <Button title="Add Repeat + Response" onPress={() => void addRepeatAndResponse()} />
           <Button title="Queue Latest Module" onPress={() => void enqueueLatestModule()} />
           <Button title="Sync Pending" onPress={() => void syncPending()} />
@@ -209,7 +241,13 @@ export function OfflineDebugScreen({ onOpenQuestionnaireModule }: { onOpenQuesti
         {interviews.map((interview) => (
           <View key={interview.id} style={styles.row}>
             <Text style={styles.rowTitle}>{interview.id}</Text>
-            <Text>{interview.local_sync_status}</Text>
+            <Text>Interview local sync: {interview.local_sync_status}</Text>
+            {(modulesByInterview[interview.id] ?? []).map((module) => (
+              <View key={module.id} style={styles.moduleRow}>
+                <Text>{module.module_type}: {module.local_sync_status}</Text>
+                <Button title={`Open ${module.module_type}`} onPress={() => onOpenQuestionnaireModule?.(module.id)} />
+              </View>
+            ))}
           </View>
         ))}
       </ScrollView>
@@ -244,6 +282,13 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     marginTop: 12
   },
+  moduleRow: {
+    backgroundColor: "#f5f1e8",
+    borderRadius: 8,
+    gap: 8,
+    marginTop: 8,
+    padding: 10
+  },
   row: {
     backgroundColor: "#ffffff",
     borderRadius: 10,
@@ -264,3 +309,10 @@ const styles = StyleSheet.create({
     marginTop: 8
   }
 });
+
+function groupModulesByInterview(modules: ModuleRow[]) {
+  return modules.reduce<Record<string, ModuleRow[]>>((acc, module) => {
+    acc[module.interview_id] = [...(acc[module.interview_id] ?? []), module];
+    return acc;
+  }, {});
+}

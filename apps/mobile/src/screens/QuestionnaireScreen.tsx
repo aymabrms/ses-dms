@@ -1,41 +1,48 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Button, KeyboardAvoidingView, Platform, SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { getDatabase, initializeDatabase } from "../db/database";
+import { createLocalInterviewModule } from "../db/repositories/interviewRepository";
+import { listActiveQuestionnaireVersions } from "../db/repositories/referenceRepository";
 import { ResponseState, QuestionnaireModuleType } from "../types/offline";
 import { QuestionRenderer } from "../questionnaires/components/QuestionRenderer";
 import { SectionRenderer } from "../questionnaires/components/SectionRenderer";
 import { resolveDefinitionOptions } from "../questionnaires/options";
 import { addRepeatInstanceForGroup, listQuestionnaireResponses, listRepeatInstancesForGroup, LocalRepeatInstanceRow, persistQuestionResponse, removeLocalOnlyRepeatInstance, rowToRuntimeValue } from "../questionnaires/persistence";
 import { getQuestionnaireDefinition } from "../questionnaires/registry";
-import { calculateCompletion, indexResponses, isRepeatDeletionAllowed, RuntimeResponse, responseKey, ValidationMessage } from "../questionnaires/runtime";
+import { calculateCompletion, evaluateModuleTriggers, indexResponses, isRepeatDeletionAllowed, ModuleTriggerResult, RuntimeResponse, responseKey, ValidationMessage } from "../questionnaires/runtime";
 import { QuestionDefinition, QuestionnaireDefinition, RepeatGroupDefinition, SectionDefinition } from "../questionnaires/types";
 
-type ModuleInfo = { id: string; module_type: QuestionnaireModuleType; version_code: string };
+type ModuleInfo = { id: string; interview_id: string; module_type: QuestionnaireModuleType; version_code: string };
+type RelatedModule = { id: string; module_type: QuestionnaireModuleType; local_sync_status: string };
+type VersionRow = { id: string; module_type: QuestionnaireModuleType };
 
-export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; onBack: () => void }) {
+export function QuestionnaireScreen({ moduleId, onBack, onOpenModule }: { moduleId: string; onBack: () => void; onOpenModule?: (moduleId: string) => void }) {
   const [definition, setDefinition] = useState<QuestionnaireDefinition | null>(null);
   const [moduleInfo, setModuleInfo] = useState<ModuleInfo | null>(null);
   const [responses, setResponses] = useState<RuntimeResponse[]>([]);
   const [repeatInstances, setRepeatInstances] = useState<LocalRepeatInstanceRow[]>([]);
+  const [relatedModules, setRelatedModules] = useState<RelatedModule[]>([]);
   const [sectionIndex, setSectionIndex] = useState(0);
   const [message, setMessage] = useState("Loading questionnaire...");
-  const [saveState, setSaveState] = useState<"Saved locally" | "Saving..." | "Dirty" | "Error">("Saved locally");
+  const [saveState, setSaveState] = useState<"Saved locally" | "Saving..." | "Unsynced changes" | "Save error">("Saved locally");
 
   const refresh = useCallback(async () => {
     const db = await initializeDatabase();
     const info = await db.getFirstAsync<ModuleInfo>(
-      "SELECT m.id, m.module_type, qv.version_code FROM local_interview_modules m INNER JOIN local_questionnaire_versions qv ON qv.id = m.questionnaire_version_id WHERE m.id = ?",
+      "SELECT m.id, m.interview_id, m.module_type, qv.version_code FROM local_interview_modules m INNER JOIN local_questionnaire_versions qv ON qv.id = m.questionnaire_version_id WHERE m.id = ?",
       moduleId
     );
     if (!info) throw new Error("Local questionnaire module not found");
     const nextDefinition = await resolveDefinitionOptions(db, getQuestionnaireDefinition(info.module_type, info.version_code));
     const responseRows = await listQuestionnaireResponses(db, moduleId);
     const repeatRowsByGroup = await Promise.all(nextDefinition.repeatGroups.map((group) => listRepeatInstancesForGroup(db, moduleId, group.code)));
+    const siblingModules = await db.getAllAsync<RelatedModule>("SELECT id, module_type, local_sync_status FROM local_interview_modules WHERE interview_id = ? ORDER BY created_at ASC", info.interview_id);
     setModuleInfo(info);
     setDefinition(nextDefinition);
     setResponses(responseRows.map((row) => ({ questionCode: row.question_code, repeatInstanceId: row.repeat_instance_id, responseState: row.response_state, value: rowToRuntimeValue(row) as RuntimeResponse["value"] })));
     setRepeatInstances(repeatRowsByGroup.flat());
+    setRelatedModules(siblingModules);
     setMessage(`${nextDefinition.moduleType} definition loaded`);
   }, [moduleId]);
 
@@ -44,6 +51,7 @@ export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; on
   }, [refresh]);
 
   const completion = useMemo(() => (definition ? calculateCompletion(definition, responses, repeatInstances.map((instance) => ({ groupCode: instance.group_code, id: instance.id, localSyncStatus: instance.local_sync_status, sequenceNumber: instance.sequence_number }))) : null), [definition, repeatInstances, responses]);
+  const triggers = useMemo(() => (definition ? evaluateModuleTriggers(definition, responses, relatedModules.map((module) => module.module_type)) : []), [definition, relatedModules, responses]);
   const section = definition?.sections[sectionIndex];
   const sectionRepeatGroup = section?.repeatGroupCode ? definition?.repeatGroups.find((group) => group.code === section.repeatGroupCode) : undefined;
 
@@ -52,11 +60,11 @@ export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; on
       setSaveState("Saving...");
       const db = await getDatabase();
       await persistQuestionResponse(db, moduleId, question.code, question.type, value, responseState, repeatInstanceId);
-      setSaveState("Dirty");
+      setSaveState("Unsynced changes");
       await refresh();
       setSaveState("Saved locally");
     } catch (error) {
-      setSaveState("Error");
+      setSaveState("Save error");
       setMessage(error instanceof Error ? error.message : "Unable to save response");
     }
   }
@@ -66,7 +74,7 @@ export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; on
       const db = await getDatabase();
       const groupInstances = repeatInstances.filter((instance) => instance.group_code === group.code);
       await addRepeatInstanceForGroup(db, moduleId, group.code, groupInstances.length + 1);
-      setSaveState("Dirty");
+      setSaveState("Unsynced changes");
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to add repeat item");
@@ -78,10 +86,29 @@ export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; on
       if (!isRepeatDeletionAllowed({ groupCode: instance.group_code, id: instance.id, localSyncStatus: instance.local_sync_status, sequenceNumber: instance.sequence_number })) throw new Error("Already-synced repeat rows cannot be deleted until delete/tombstone sync is implemented.");
       const db = await getDatabase();
       await removeLocalOnlyRepeatInstance(db, moduleId, instance.id);
-      setSaveState("Dirty");
+      setSaveState("Unsynced changes");
       await refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to remove repeat row");
+    }
+  }
+
+  async function addOrOpenTriggeredModule(trigger: ModuleTriggerResult) {
+    try {
+      const existing = relatedModules.find((module) => module.module_type === trigger.targetModuleType);
+      if (existing) {
+        onOpenModule?.(existing.id);
+        return;
+      }
+      const db = await getDatabase();
+      const versions = (await listActiveQuestionnaireVersions(db)) as VersionRow[];
+      const version = versions.find((candidate) => candidate.module_type === trigger.targetModuleType);
+      if (!version) throw new Error(`No local ${trigger.targetModuleType} questionnaire version is available. Run bootstrap first.`);
+      const module = (await createLocalInterviewModule(db, { interviewId: moduleInfo!.interview_id, moduleType: trigger.targetModuleType as QuestionnaireModuleType, questionnaireVersionId: version.id })) as RelatedModule;
+      await refresh();
+      onOpenModule?.(module.id);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to add recommended module");
     }
   }
 
@@ -98,7 +125,8 @@ export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; on
 
   return (
     <SafeAreaView style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.keyboardWrap}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Button title="Back to Debug" onPress={onBack} />
         <Text style={styles.label}>{definition.moduleType} Survey</Text>
         <Text style={styles.title}>{definition.title}</Text>
@@ -108,11 +136,13 @@ export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; on
           <Text>Completion: {completion?.completionState ?? "NOT_STARTED"}</Text>
           <Text>Required missing: {completion?.requiredMissingCount ?? 0}</Text>
           <Text>Warnings: {completion?.warningCount ?? 0}</Text>
-          <Text>Save status: {saveState}</Text>
+          <Text>Local save: {saveState}</Text>
+          <Text>Outbox/sync status remains separate from local save status.</Text>
         </View>
+        <TriggerPanel modules={relatedModules} onAddOrOpen={(trigger) => void addOrOpenTriggeredModule(trigger)} triggers={triggers} />
         <View style={styles.sectionTabs}>
           {definition.sections.map((candidate, index) => (
-            <Text key={candidate.code} onPress={() => setSectionIndex(index)} style={[styles.sectionTab, index === sectionIndex && styles.sectionTabActive]}>{index + 1}. {candidate.title} {sectionStatus(candidate, definition, completion?.messages ?? [])}</Text>
+            <Text key={candidate.code} onPress={() => setSectionIndex(index)} style={[styles.sectionTab, index === sectionIndex && styles.sectionTabActive]}>{index + 1}. {candidate.title} - {sectionStatus(candidate, definition, responses, completion?.messages ?? [])}</Text>
           ))}
         </View>
         {sectionRepeatGroup ? (
@@ -125,7 +155,26 @@ export function QuestionnaireScreen({ moduleId, onBack }: { moduleId: string; on
           <Button title="Next" disabled={sectionIndex >= definition.sections.length - 1} onPress={() => setSectionIndex((current) => Math.min(definition.sections.length - 1, current + 1))} />
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
+  );
+}
+
+function TriggerPanel({ modules, onAddOrOpen, triggers }: { modules: RelatedModule[]; onAddOrOpen: (trigger: ModuleTriggerResult) => void; triggers: ModuleTriggerResult[] }) {
+  if (triggers.length === 0) return null;
+  return (
+    <View style={styles.triggerCard}>
+      <Text style={styles.triggerTitle}>Module Recommendations</Text>
+      {triggers.map((trigger) => {
+        const existing = modules.find((module) => module.module_type === trigger.targetModuleType);
+        return (
+          <View key={`${trigger.questionCode}:${trigger.repeatInstanceId ?? "root"}:${trigger.targetModuleType}`} style={styles.triggerItem}>
+            <Text style={styles.message}>{trigger.outcome}: {trigger.message}</Text>
+            <Button title={existing ? `Open ${trigger.targetModuleType}` : `Add ${trigger.targetModuleType} Module`} onPress={() => onAddOrOpen(trigger)} />
+          </View>
+        );
+      })}
+    </View>
   );
 }
 
@@ -157,11 +206,14 @@ function RepeatInstanceEditor({ group, index, instance, messages, onRemove, onSa
   );
 }
 
-function sectionStatus(section: SectionDefinition, definition: QuestionnaireDefinition, messages: ValidationMessage[]) {
+function sectionStatus(section: SectionDefinition, definition: QuestionnaireDefinition, responses: RuntimeResponse[], messages: ValidationMessage[]) {
   const repeatGroupQuestions = section.repeatGroupCode ? definition.repeatGroups.find((group) => group.code === section.repeatGroupCode)?.questions ?? [] : [];
   const sectionCodes = new Set([...section.questions, ...repeatGroupQuestions].map((question) => question.code));
-  const hasErrors = messages.some((message) => sectionCodes.has(message.code));
-  return hasErrors ? "!" : "";
+  if (messages.some((message) => sectionCodes.has(message.code) && message.severity === "BLOCKING_ERROR")) return "Blocked";
+  if (messages.some((message) => sectionCodes.has(message.code) && message.severity === "ERROR")) return "Missing";
+  if (messages.some((message) => sectionCodes.has(message.code) && message.severity === "WARNING")) return "Warning";
+  const answered = responses.some((response) => sectionCodes.has(response.questionCode) && response.responseState === "ANSWERED" && response.value !== null && response.value !== "");
+  return answered ? "In Progress" : "Not Started";
 }
 
 function singularize(title: string) {
@@ -173,6 +225,7 @@ function singularize(title: string) {
 
 const styles = StyleSheet.create({
   content: { gap: 14, padding: 18 },
+  keyboardWrap: { flex: 1 },
   label: { color: "#47755d", fontSize: 12, fontWeight: "800", letterSpacing: 2, marginTop: 10, textTransform: "uppercase" },
   memberCard: { backgroundColor: "#fff", borderRadius: 14, gap: 12, padding: 12 },
   memberHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
@@ -188,5 +241,8 @@ const styles = StyleSheet.create({
   sectionTitle: { color: "#14241c", fontSize: 22, fontWeight: "800" },
   sectionWrap: { gap: 12 },
   statusCard: { backgroundColor: "#fffaf0", borderRadius: 12, gap: 5, padding: 12 },
-  title: { color: "#16261f", fontSize: 28, fontWeight: "800" }
+  title: { color: "#16261f", fontSize: 28, fontWeight: "800" },
+  triggerCard: { backgroundColor: "#fff3cd", borderRadius: 12, gap: 10, padding: 12 },
+  triggerItem: { gap: 8 },
+  triggerTitle: { color: "#6c5300", fontWeight: "800" }
 });

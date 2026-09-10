@@ -185,3 +185,9 @@ The fuller Household questionnaire coverage remains bundled in the mobile defini
 **Status:** Accepted for Phase 6D
 
 Household and Business questionnaires use the same `QuestionnaireScreen`, which resolves the bundled definition from the local module type and version code. Module-specific screens may remain as thin wrappers only. Business is added as another versioned bundled definition and continues to persist through existing local response, repeat, dirty-module, and outbox paths without backend, schema, or sync-contract changes.
+
+## ADR-032: Phase 6 completes questionnaires without backend/schema changes
+
+**Status:** Accepted for Phase 6
+
+Landowner is added as a third bundled definition and all three modules use the same generic offline renderer. Cross-module triggers produce explicit recommendations and add/open actions, not automatic module creation. Multi-role interviews are represented by multiple local interview modules under one interview, while questionnaire completion, local sync, and server workflow status remain separate.
