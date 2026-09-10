@@ -147,6 +147,18 @@ export class InterviewsService {
   }
 
   private async validateOptionalModuleContexts(dto: CreateInterviewModuleDto) {
+    if (dto.moduleType === "HOUSEHOLD" && (dto.businessId || dto.landParcelId)) {
+      throw new BadRequestException("Household modules may only use householdId and optional structureId context");
+    }
+
+    if (dto.moduleType === "BUSINESS" && (dto.householdId || dto.landParcelId)) {
+      throw new BadRequestException("Business modules may only use businessId and optional structureId context");
+    }
+
+    if (dto.moduleType === "LANDOWNER" && (dto.householdId || dto.businessId)) {
+      throw new BadRequestException("Landowner modules may only use landParcelId and optional structureId context");
+    }
+
     const checks: Array<Promise<unknown>> = [];
 
     if (dto.householdId) {

@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 
+import { DomainModule } from "./domain/domain.module";
 import { InterviewsModule } from "./interviews/interviews.module";
 import { HealthController } from "./health.controller";
 import { PersonsModule } from "./persons/persons.module";
@@ -18,7 +19,8 @@ import { UsersModule } from "./users/users.module";
     UsersModule,
     QuestionnaireVersionsModule,
     PersonsModule,
-    InterviewsModule
+    InterviewsModule,
+    DomainModule
   ]
 })
 export class AppModule {}

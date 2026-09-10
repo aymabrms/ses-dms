@@ -83,3 +83,9 @@ The first API layer exposes Projects, Survey Areas, Users, Questionnaire Version
 **Status:** Accepted for Phase 4A
 
 The NestJS API uses a global validation pipe with whitelist, forbidden non-whitelisted fields, and transformation enabled. This keeps Phase 4A REST payloads explicit and prevents accidental acceptance of unsupported questionnaire or workflow data.
+
+## ADR-015: Phase 4B relationship APIs validate domain links before persistence
+
+**Status:** Accepted for Phase 4B
+
+The Household, Business, Land, and Structure APIs validate required references, project boundaries, ownership XOR rules, occupancy XOR rules, and safe duplicate relationship cases at the service layer. No new database migrations or unique constraints are introduced in Phase 4B.
